@@ -997,11 +997,12 @@
     // Retrieve DOI Pending Contacts aggregated data
     // This queries the pre-aggregated DOI_Pending_Contacts_Aggregated DE
     // which is populated daily by an Automation Studio SQL Query Activity
+    // Now includes SignupIdentifier for dual views (by Region and by Identifier)
     function retrieveDOIPendingContacts() {
         var allRecords = [];
         try {
             // Use LookupRows for simplicity - the aggregated DE should have minimal rows
-            // (one row per region per journey type, typically under 100 total)
+            // (one row per region/journeyType/signupIdentifier combination)
             var rows = Platform.Function.LookupRows("DOI_Pending_Contacts_Aggregated", "", "");
             
             if (rows && rows.length > 0) {
@@ -1011,6 +1012,7 @@
                         snapshotDate: formatDateValue(row.SnapshotDate),
                         region: (row.Region || "").toUpperCase(),
                         journeyType: row.JourneyType || "",
+                        signupIdentifier: row.SignupIdentifier || "Unknown",
                         pendingCount: safeInteger(row.PendingCount),
                         oldestPendingDate: formatDateValue(row.OldestPendingDate),
                         newestPendingDate: formatDateValue(row.NewestPendingDate),
@@ -1023,7 +1025,7 @@
             // If LookupRows fails, try WSProxy as fallback
             try {
                 var prox = new Script.Util.WSProxy();
-                var cols = ["SnapshotDate", "Region", "JourneyType", "PendingCount", "OldestPendingDate", "NewestPendingDate", "InsertedDate"];
+                var cols = ["SnapshotDate", "Region", "JourneyType", "SignupIdentifier", "PendingCount", "OldestPendingDate", "NewestPendingDate", "InsertedDate"];
                 var data = prox.retrieve("DataExtensionObject[DOI_Pending_Contacts_Aggregated]", cols, null);
                 
                 if (data && data.Results) {
@@ -1033,6 +1035,7 @@
                             snapshotDate: "",
                             region: "",
                             journeyType: "",
+                            signupIdentifier: "Unknown",
                             pendingCount: 0,
                             oldestPendingDate: "",
                             newestPendingDate: "",
@@ -1049,6 +1052,9 @@
                                     break;
                                 case "JourneyType":
                                     obj.journeyType = prop.Value || "";
+                                    break;
+                                case "SignupIdentifier":
+                                    obj.signupIdentifier = prop.Value || "Unknown";
                                     break;
                                 case "PendingCount":
                                     obj.pendingCount = safeInteger(prop.Value);
@@ -3697,6 +3703,42 @@
             font-style: italic;
         }
 
+        .pending-view-toggle {
+            display: flex;
+            gap: 0.5rem;
+            margin: 1rem 0;
+        }
+
+        .pending-view-btn {
+            padding: 0.5rem 1rem;
+            background: var(--milwaukee-grey);
+            color: var(--text);
+            border: 2px solid var(--border);
+            cursor: pointer;
+            transition: all 0.3s ease;
+            font-size: 0.875rem;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .pending-view-btn:hover {
+            background: rgba(255, 165, 0, 0.1);
+            border-color: #ffa500;
+            color: #ffa500;
+        }
+
+        .pending-view-btn.active {
+            background: #ffa500;
+            color: white;
+            border-color: #ffa500;
+        }
+
+        .pending-view-btn i {
+            font-size: 1rem;
+        }
+
         .pending-table-container {
             overflow-x: auto;
             background: var(--milwaukee-white);
@@ -3747,6 +3789,13 @@
         .pending-region {
             font-weight: 700;
             color: var(--text);
+        }
+
+        .pending-identifier {
+            font-weight: 600;
+            color: var(--text);
+            font-family: 'Consolas', 'Monaco', monospace;
+            font-size: 0.8rem;
         }
 
         .pending-journey-badge {
@@ -4769,21 +4818,57 @@
                                 <div class="pending-stat-label">Regions</div>
                                 <div class="pending-stat-sublabel">With pending contacts</div>
                             </div>
+                            <div class="pending-stat-card">
+                                <div class="pending-stat-value" id="pendingIdentifierCount">0</div>
+                                <div class="pending-stat-label">Signup Sources</div>
+                                <div class="pending-stat-sublabel">With pending contacts</div>
+                            </div>
+                        </div>
+                        
+                        <!-- View Toggle -->
+                        <div class="pending-view-toggle">
+                            <button class="pending-view-btn active" data-view="region" onclick="togglePendingView('region')">
+                                <i class="bi bi-globe"></i> By Region
+                            </button>
+                            <button class="pending-view-btn" data-view="identifier" onclick="togglePendingView('identifier')">
+                                <i class="bi bi-tag"></i> By Signup Identifier
+                            </button>
                         </div>
                         
                         <!-- Regional Breakdown Table -->
-                        <div class="pending-table-container">
+                        <div class="pending-table-container" id="pendingRegionTableContainer">
                             <table class="pending-table">
                                 <thead>
                                     <tr>
                                         <th>Region</th>
-                                        <th>Journey Type</th>
                                         <th>Pending Count</th>
+                                        <th>Generic</th>
+                                        <th>PEM</th>
                                         <th>Oldest Pending</th>
                                         <th>Newest Pending</th>
                                     </tr>
                                 </thead>
-                                <tbody id="pendingContactsTableBody">
+                                <tbody id="pendingRegionTableBody">
+                                    <!-- Table content will be populated by JavaScript -->
+                                </tbody>
+                            </table>
+                        </div>
+                        
+                        <!-- Signup Identifier Breakdown Table -->
+                        <div class="pending-table-container d-none" id="pendingIdentifierTableContainer">
+                            <table class="pending-table">
+                                <thead>
+                                    <tr>
+                                        <th>Signup Identifier</th>
+                                        <th>Pending Count</th>
+                                        <th>Regions</th>
+                                        <th>Generic</th>
+                                        <th>PEM</th>
+                                        <th>Oldest Pending</th>
+                                        <th>Newest Pending</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="pendingIdentifierTableBody">
                                     <!-- Table content will be populated by JavaScript -->
                                 </tbody>
                             </table>
@@ -12397,7 +12482,32 @@
         // == DOI PENDING CONTACTS FUNCTIONS ===============================================
         // ==================================================================================
 
-        // Render the DOI Pending Contacts section
+        // Track current pending contacts view
+        let currentPendingView = 'region';
+
+        // Toggle between Region and Identifier views
+        function togglePendingView(view) {
+            currentPendingView = view;
+            
+            // Update button states
+            document.querySelectorAll('.pending-view-btn').forEach(btn => {
+                btn.classList.toggle('active', btn.dataset.view === view);
+            });
+            
+            // Toggle table visibility
+            const regionContainer = document.getElementById('pendingRegionTableContainer');
+            const identifierContainer = document.getElementById('pendingIdentifierTableContainer');
+            
+            if (view === 'region') {
+                regionContainer.classList.remove('d-none');
+                identifierContainer.classList.add('d-none');
+            } else {
+                regionContainer.classList.add('d-none');
+                identifierContainer.classList.remove('d-none');
+            }
+        }
+
+        // Render the DOI Pending Contacts section with dual views
         function renderPendingContactsSection() {
             const data = typeof pendingContactsData !== 'undefined' ? pendingContactsData : [];
             
@@ -12406,6 +12516,7 @@
             let genericTotal = 0;
             let pemTotal = 0;
             const regionsWithPending = new Set();
+            const identifiersWithPending = new Set();
             let lastUpdated = null;
             
             data.forEach(item => {
@@ -12418,8 +12529,9 @@
                     pemTotal += count;
                 }
                 
-                if (count > 0 && item.region) {
-                    regionsWithPending.add(item.region);
+                if (count > 0) {
+                    if (item.region) regionsWithPending.add(item.region);
+                    if (item.signupIdentifier) identifiersWithPending.add(item.signupIdentifier);
                 }
                 
                 // Track the most recent inserted date
@@ -12433,6 +12545,7 @@
             document.getElementById('pendingGenericCount').textContent = genericTotal.toLocaleString();
             document.getElementById('pendingPEMCount').textContent = pemTotal.toLocaleString();
             document.getElementById('pendingRegionCount').textContent = regionsWithPending.size;
+            document.getElementById('pendingIdentifierCount').textContent = identifiersWithPending.size;
             
             // Update last updated timestamp
             const lastUpdatedEl = document.getElementById('pendingLastUpdated');
@@ -12449,42 +12562,163 @@
                 lastUpdatedEl.textContent = '';
             }
             
-            // Render table
-            const tbody = document.getElementById('pendingContactsTableBody');
+            // Render both tables
+            renderPendingByRegionTable(data);
+            renderPendingByIdentifierTable(data);
+        }
+
+        // Render the "By Region" table (aggregates across identifiers)
+        function renderPendingByRegionTable(data) {
+            const tbody = document.getElementById('pendingRegionTableBody');
             
             if (data.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="5" class="pending-no-data">No pending DOI contacts data available. Please ensure the DOI_Pending_Contacts_Aggregated Data Extension has been created and populated by the automation.</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="6" class="pending-no-data">No pending DOI contacts data available. Please ensure the DOI_Pending_Contacts_Aggregated Data Extension has been created and populated by the automation.</td></tr>';
                 return;
             }
             
-            // Sort by pending count descending, then by region
-            const sortedData = [...data].sort((a, b) => {
-                if (b.pendingCount !== a.pendingCount) {
-                    return b.pendingCount - a.pendingCount;
+            // Aggregate by region
+            const regionMap = new Map();
+            
+            data.forEach(item => {
+                const region = item.region || 'Unknown';
+                if (!regionMap.has(region)) {
+                    regionMap.set(region, {
+                        region: region,
+                        total: 0,
+                        generic: 0,
+                        pem: 0,
+                        oldestDate: null,
+                        newestDate: null
+                    });
                 }
-                return (a.region || '').localeCompare(b.region || '');
+                
+                const regionData = regionMap.get(region);
+                regionData.total += item.pendingCount || 0;
+                
+                if (item.journeyType === 'Generic') {
+                    regionData.generic += item.pendingCount || 0;
+                } else if (item.journeyType === 'PEM') {
+                    regionData.pem += item.pendingCount || 0;
+                }
+                
+                // Track oldest and newest dates
+                if (item.oldestPendingDate) {
+                    if (!regionData.oldestDate || item.oldestPendingDate < regionData.oldestDate) {
+                        regionData.oldestDate = item.oldestPendingDate;
+                    }
+                }
+                if (item.newestPendingDate) {
+                    if (!regionData.newestDate || item.newestPendingDate > regionData.newestDate) {
+                        regionData.newestDate = item.newestPendingDate;
+                    }
+                }
             });
             
-            // Filter out rows with 0 pending (optional - show all for transparency)
-            // const filteredData = sortedData.filter(item => item.pendingCount > 0);
-            const filteredData = sortedData;
+            // Convert to array and sort by total descending
+            const sortedRegions = Array.from(regionMap.values())
+                .filter(r => r.total > 0)
+                .sort((a, b) => b.total - a.total);
             
-            if (filteredData.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="5" class="pending-no-data">🎉 Great news! No contacts are currently pending DOI confirmation.</td></tr>';
+            if (sortedRegions.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="6" class="pending-no-data">🎉 Great news! No contacts are currently pending DOI confirmation.</td></tr>';
                 return;
             }
             
             let tableHTML = '';
-            filteredData.forEach(item => {
-                const journeyBadgeClass = item.journeyType === 'PEM' ? 'pem' : 'generic';
-                const oldestDate = item.oldestPendingDate ? formatDateForDisplay(item.oldestPendingDate) : '-';
-                const newestDate = item.newestPendingDate ? formatDateForDisplay(item.newestPendingDate) : '-';
+            sortedRegions.forEach(item => {
+                const oldestDate = item.oldestDate ? formatDateForDisplay(item.oldestDate) : '-';
+                const newestDate = item.newestDate ? formatDateForDisplay(item.newestDate) : '-';
                 
                 tableHTML += `
                     <tr>
-                        <td class="pending-region">${item.region || 'Unknown'}</td>
-                        <td><span class="pending-journey-badge ${journeyBadgeClass}">${item.journeyType || 'Unknown'}</span></td>
-                        <td class="pending-count">${(item.pendingCount || 0).toLocaleString()}</td>
+                        <td class="pending-region">${item.region}</td>
+                        <td class="pending-count">${item.total.toLocaleString()}</td>
+                        <td>${item.generic.toLocaleString()}</td>
+                        <td>${item.pem.toLocaleString()}</td>
+                        <td class="pending-date">${oldestDate}</td>
+                        <td class="pending-date">${newestDate}</td>
+                    </tr>
+                `;
+            });
+            
+            tbody.innerHTML = tableHTML;
+        }
+
+        // Render the "By Identifier" table (aggregates across regions)
+        function renderPendingByIdentifierTable(data) {
+            const tbody = document.getElementById('pendingIdentifierTableBody');
+            
+            if (data.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="7" class="pending-no-data">No pending DOI contacts data available. Please ensure the DOI_Pending_Contacts_Aggregated Data Extension has been created and populated by the automation.</td></tr>';
+                return;
+            }
+            
+            // Aggregate by signup identifier
+            const identifierMap = new Map();
+            
+            data.forEach(item => {
+                const identifier = item.signupIdentifier || 'Unknown';
+                if (!identifierMap.has(identifier)) {
+                    identifierMap.set(identifier, {
+                        signupIdentifier: identifier,
+                        total: 0,
+                        generic: 0,
+                        pem: 0,
+                        regions: new Set(),
+                        oldestDate: null,
+                        newestDate: null
+                    });
+                }
+                
+                const identifierData = identifierMap.get(identifier);
+                identifierData.total += item.pendingCount || 0;
+                
+                if (item.journeyType === 'Generic') {
+                    identifierData.generic += item.pendingCount || 0;
+                } else if (item.journeyType === 'PEM') {
+                    identifierData.pem += item.pendingCount || 0;
+                }
+                
+                // Track regions
+                if (item.region && item.pendingCount > 0) {
+                    identifierData.regions.add(item.region);
+                }
+                
+                // Track oldest and newest dates
+                if (item.oldestPendingDate) {
+                    if (!identifierData.oldestDate || item.oldestPendingDate < identifierData.oldestDate) {
+                        identifierData.oldestDate = item.oldestPendingDate;
+                    }
+                }
+                if (item.newestPendingDate) {
+                    if (!identifierData.newestDate || item.newestPendingDate > identifierData.newestDate) {
+                        identifierData.newestDate = item.newestPendingDate;
+                    }
+                }
+            });
+            
+            // Convert to array and sort by total descending
+            const sortedIdentifiers = Array.from(identifierMap.values())
+                .filter(i => i.total > 0)
+                .sort((a, b) => b.total - a.total);
+            
+            if (sortedIdentifiers.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="7" class="pending-no-data">🎉 Great news! No contacts are currently pending DOI confirmation.</td></tr>';
+                return;
+            }
+            
+            let tableHTML = '';
+            sortedIdentifiers.forEach(item => {
+                const oldestDate = item.oldestDate ? formatDateForDisplay(item.oldestDate) : '-';
+                const newestDate = item.newestDate ? formatDateForDisplay(item.newestDate) : '-';
+                
+                tableHTML += `
+                    <tr>
+                        <td class="pending-identifier">${item.signupIdentifier}</td>
+                        <td class="pending-count">${item.total.toLocaleString()}</td>
+                        <td>${item.regions.size}</td>
+                        <td>${item.generic.toLocaleString()}</td>
+                        <td>${item.pem.toLocaleString()}</td>
                         <td class="pending-date">${oldestDate}</td>
                         <td class="pending-date">${newestDate}</td>
                     </tr>

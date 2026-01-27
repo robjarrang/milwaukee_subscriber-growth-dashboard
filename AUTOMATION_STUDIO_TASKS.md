@@ -1088,14 +1088,15 @@ WHERE SendDate < DATEADD(MONTH, -12, GETDATE())
 | 2025-01-XX | Initial | Created documentation with Tasks 1-5 |
 | 2025-12-15 | Investigation | **Task 1 Updated:** Fixed "Region Not Found" issue (was showing 27,119 when actual undetectable was ~7,400). Added EmailName fallback patterns, " - XX" suffix support for Re-engagement emails, compound suffix patterns (DEAT, FRBE, etc.), and additional transactional email exclusions. |
 | 2026-01-26 | Enhancement | **Task 7 Added:** DOI Pending Contacts Aggregation for dashboard pending contacts monitoring feature. |
+| 2026-01-27 | Enhancement | **Task 7 Updated:** Added SignupIdentifier grouping to support dual views (by Region and by Signup Identifier) in the dashboard. |
 
 ---
 
-## Task 7: Aggregate DOI Pending Contacts by Region
+## Task 7: Aggregate DOI Pending Contacts by Region and Signup Identifier
 
 **Activity Type:** SQL Query Activity
 
-**Purpose:** Aggregate counts of contacts currently pending Double Opt-In (DOI) confirmation from the shared DOI journey Data Extensions. This provides the dashboard with pre-aggregated regional counts to avoid CloudPage request limits.
+**Purpose:** Aggregate counts of contacts currently pending Double Opt-In (DOI) confirmation from the shared DOI journey Data Extensions. This provides the dashboard with pre-aggregated counts by region AND signup identifier to avoid CloudPage request limits, enabling two distinct views of pending contacts.
 
 **Source Data Extensions (Shared):**
 - `ENT.DOI Generic Journey` - General signup flow
@@ -1110,10 +1111,13 @@ WHERE SendDate < DATEADD(MONTH, -12, GETDATE())
 **SQL Query:**
 ```sql
 /*
- * Task 7: Aggregate DOI Pending Contacts by Region
+ * Task 7: Aggregate DOI Pending Contacts by Region and Signup Identifier
  * 
  * Created: January 2026
+ * Updated: January 2026 - Added SignupIdentifier grouping
+ * 
  * Purpose: Provide aggregated pending DOI counts for dashboard display
+ *          Supports two views: by Region and by SignupIdentifier
  * 
  * Filter Criteria:
  * - OptinStatus = 'Double Opt-In Pending' (only pending confirmations)
@@ -1122,7 +1126,8 @@ WHERE SendDate < DATEADD(MONTH, -12, GETDATE())
  * 
  * Notes:
  * - Uses UNION ALL to combine both DOI journey sources
- * - Groups by UserCulture (region) for regional breakdown
+ * - Groups by UserCulture (region) AND SignupIdentifier for granular breakdown
+ * - Dashboard aggregates client-side for regional or identifier views
  * - Tracks oldest and newest pending dates for monitoring
  */
 
@@ -1130,6 +1135,7 @@ SELECT
     CONVERT(DATE, GETDATE()) AS SnapshotDate,
     UPPER(UserCulture) AS Region,
     'Generic' AS JourneyType,
+    COALESCE(NULLIF(SignupIdentifier, ''), 'Unknown') AS SignupIdentifier,
     COUNT(*) AS PendingCount,
     MIN(TokenDate) AS OldestPendingDate,
     MAX(TokenDate) AS NewestPendingDate,
@@ -1140,7 +1146,7 @@ WHERE OptinStatus = 'Double Opt-In Pending'
     AND TokenDate >= DATEADD(DAY, -3, GETDATE())
     AND UserCulture IS NOT NULL
     AND UserCulture != ''
-GROUP BY UPPER(UserCulture)
+GROUP BY UPPER(UserCulture), COALESCE(NULLIF(SignupIdentifier, ''), 'Unknown')
 
 UNION ALL
 
@@ -1148,6 +1154,7 @@ SELECT
     CONVERT(DATE, GETDATE()) AS SnapshotDate,
     UPPER(UserCulture) AS Region,
     'PEM' AS JourneyType,
+    COALESCE(NULLIF(SignupIdentifier, ''), 'Unknown') AS SignupIdentifier,
     COUNT(*) AS PendingCount,
     MIN(TokenDate) AS OldestPendingDate,
     MAX(TokenDate) AS NewestPendingDate,
@@ -1158,59 +1165,92 @@ WHERE OptinStatus = 'Double Opt-In Pending'
     AND TokenDate >= DATEADD(DAY, -3, GETDATE())
     AND UserCulture IS NOT NULL
     AND UserCulture != ''
-GROUP BY UPPER(UserCulture)
+GROUP BY UPPER(UserCulture), COALESCE(NULLIF(SignupIdentifier, ''), 'Unknown')
 ```
 
 **Key Features:**
 - Filters only contacts with `OptinStatus = 'Double Opt-In Pending'`
 - Ensures `IsLatest = 'True'` to avoid counting duplicate records for same contact
 - Only counts contacts within the 3-day confirmation window (token validity period)
+- Groups by BOTH Region AND SignupIdentifier for maximum flexibility
 - Separates counts by journey type (Generic vs PEM) for detailed analysis
+- Handles empty/null SignupIdentifier values with 'Unknown' fallback
 - Tracks oldest and newest pending dates to monitor confirmation delays
 - Converts UserCulture to uppercase for consistent region codes
 
+**Dashboard Aggregation:**
+The dashboard performs client-side aggregation to provide two distinct views:
+1. **By Region:** Sums PendingCount across all SignupIdentifiers per region
+2. **By SignupIdentifier:** Sums PendingCount across all regions per identifier
+
 **Expected Output:**
-| SnapshotDate | Region | JourneyType | PendingCount | OldestPendingDate | NewestPendingDate |
-|--------------|--------|-------------|--------------|-------------------|-------------------|
-| 2026-01-26 | DE-DE | Generic | 145 | 2026-01-23 | 2026-01-26 |
-| 2026-01-26 | DE-DE | PEM | 23 | 2026-01-24 | 2026-01-26 |
-| 2026-01-26 | EN-GB | Generic | 89 | 2026-01-23 | 2026-01-26 |
-| 2026-01-26 | FR-FR | Generic | 67 | 2026-01-24 | 2026-01-25 |
-| ... | ... | ... | ... | ... | ... |
+| SnapshotDate | Region | JourneyType | SignupIdentifier | PendingCount | OldestPendingDate | NewestPendingDate |
+|--------------|--------|-------------|------------------|--------------|-------------------|-------------------|
+| 2026-01-27 | DE-DE | Generic | website_footer | 45 | 2026-01-24 | 2026-01-27 |
+| 2026-01-27 | DE-DE | Generic | campaign_jan2026 | 67 | 2026-01-25 | 2026-01-27 |
+| 2026-01-27 | DE-DE | Generic | Unknown | 12 | 2026-01-24 | 2026-01-26 |
+| 2026-01-27 | DE-DE | PEM | prize_landing | 23 | 2026-01-24 | 2026-01-27 |
+| 2026-01-27 | EN-GB | Generic | website_footer | 34 | 2026-01-24 | 2026-01-27 |
+| 2026-01-27 | FR-FR | Generic | campaign_jan2026 | 28 | 2026-01-25 | 2026-01-26 |
+| ... | ... | ... | ... | ... | ... | ... |
 
 **Data Extension Creation:**
 ```sql
 /* Create DOI_Pending_Contacts_Aggregated Data Extension */
 
--- Primary Key: SnapshotDate, Region, JourneyType (composite)
+-- Primary Key: SnapshotDate, Region, JourneyType, SignupIdentifier (composite)
 -- Fields:
 -- SnapshotDate (Date, PK, Not Nullable)
 -- Region (Text 50, PK, Not Nullable)
 -- JourneyType (Text 50, PK, Not Nullable)
+-- SignupIdentifier (Text 200, PK, Not Nullable)
 -- PendingCount (Number, Not Nullable, Default 0)
 -- OldestPendingDate (Date, Nullable)
 -- NewestPendingDate (Date, Nullable)
 -- InsertedDate (Date, Not Nullable, Default GETDATE())
 ```
 
-**Verification Query:**
+**Verification Queries:**
 ```sql
 -- Verify totals by journey type
 SELECT 
     JourneyType,
     SUM(PendingCount) AS TotalPending,
-    COUNT(DISTINCT Region) AS RegionsWithPending
+    COUNT(DISTINCT Region) AS RegionsWithPending,
+    COUNT(DISTINCT SignupIdentifier) AS IdentifiersWithPending
 FROM DOI_Pending_Contacts_Aggregated
 WHERE SnapshotDate = CONVERT(DATE, GETDATE())
 GROUP BY JourneyType
 
+-- Check totals by region (aggregated across identifiers)
+SELECT 
+    Region,
+    SUM(PendingCount) AS TotalPending,
+    COUNT(DISTINCT SignupIdentifier) AS UniqueIdentifiers
+FROM DOI_Pending_Contacts_Aggregated
+WHERE SnapshotDate = CONVERT(DATE, GETDATE())
+GROUP BY Region
+ORDER BY TotalPending DESC
+
+-- Check totals by signup identifier (aggregated across regions)
+SELECT 
+    SignupIdentifier,
+    SUM(PendingCount) AS TotalPending,
+    COUNT(DISTINCT Region) AS RegionsAffected
+FROM DOI_Pending_Contacts_Aggregated
+WHERE SnapshotDate = CONVERT(DATE, GETDATE())
+GROUP BY SignupIdentifier
+ORDER BY TotalPending DESC
+
 -- Check for data freshness
 SELECT 
     MAX(InsertedDate) AS LastUpdated,
-    SUM(PendingCount) AS TotalPendingContacts
+    SUM(PendingCount) AS TotalPendingContacts,
+    COUNT(DISTINCT Region) AS TotalRegions,
+    COUNT(DISTINCT SignupIdentifier) AS TotalIdentifiers
 FROM DOI_Pending_Contacts_Aggregated
 ```
 
 ---
 
-*Last Updated: January 2026*
+*Last Updated: 27 January 2026*

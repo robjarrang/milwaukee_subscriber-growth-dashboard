@@ -387,19 +387,20 @@ BounceRatePct = (TotalBouncedUnique / TotalSent) × 100
 
 ## B.6 DOI_Pending_Contacts_Aggregated
 
-**Purpose:** Aggregated counts of contacts currently pending Double Opt-In (DOI) confirmation, grouped by region. This DE is populated daily by an Automation Studio SQL Query Activity that queries the shared `DOI Generic Journey` and `DOI PEM Journey` Data Extensions.
+**Purpose:** Aggregated counts of contacts currently pending Double Opt-In (DOI) confirmation, grouped by region and signup identifier. This DE is populated daily by an Automation Studio SQL Query Activity that queries the shared `DOI Generic Journey` and `DOI PEM Journey` Data Extensions.
 
 | Field Name | Data Type | Length | Primary Key | Nullable | Default Value | Description |
 |------------|-----------|--------|-------------|----------|---------------|-------------|
 | SnapshotDate | Date | - | ✓ | No | - | Date of the snapshot (GETDATE()) |
 | Region | Text | 50 | ✓ | No | - | Geographic region/culture code from UserCulture field |
 | JourneyType | Text | 50 | ✓ | No | - | Source journey: 'Generic' or 'PEM' |
+| SignupIdentifier | Text | 200 | ✓ | No | - | Source/form identifier for the signup (e.g., 'website_footer', 'campaign_landing') |
 | PendingCount | Number | - | No | No | 0 | Count of contacts with pending DOI status |
-| OldestPendingDate | Date | - | No | Yes | - | Oldest TokenDate among pending contacts for this region |
-| NewestPendingDate | Date | - | No | Yes | - | Most recent TokenDate among pending contacts for this region |
+| OldestPendingDate | Date | - | No | Yes | - | Oldest TokenDate among pending contacts for this combination |
+| NewestPendingDate | Date | - | No | Yes | - | Most recent TokenDate among pending contacts for this combination |
 | InsertedDate | Date | - | No | No | GETDATE() | Timestamp when record was inserted |
 
-**Primary Key:** Composite key of (SnapshotDate, Region, JourneyType)
+**Primary Key:** Composite key of (SnapshotDate, Region, JourneyType, SignupIdentifier)
 
 **Source Data Extensions (Shared):**
 - `ENT.DOI Generic Journey` - General signup flow pending contacts
@@ -411,14 +412,16 @@ BounceRatePct = (TotalBouncedUnique / TotalSent) × 100
 - `TokenDate >= DATEADD(DAY, -3, GETDATE())` - Only within 3-day confirmation window
 
 **Dashboard Usage:**
-- Overview tab: Pending DOI contacts summary card
-- Regional breakdown of pending confirmations
-- Monitoring DOI confirmation pipeline health
+- Overview tab: Pending DOI contacts summary cards
+- Regional breakdown of pending confirmations (aggregated across identifiers)
+- Signup identifier breakdown (aggregated across regions)
+- Monitoring DOI confirmation pipeline health by source
 
 **Notes:**
 - This aggregated DE exists to avoid CloudPage request limits when querying large shared DEs
 - Read-only from the CloudPage perspective (populated by Automation Studio only)
 - Contacts older than 3 days are not counted as the confirmation link expires
+- Dashboard aggregates data client-side to show both regional and identifier views
 
 ---
 
