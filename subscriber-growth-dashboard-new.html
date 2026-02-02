@@ -124,6 +124,7 @@
     var signupPerformanceJSON = "[]";
     var signupIdentifierPerformanceJSON = "[]";
     var pendingContactsJSON = "[]";
+    var myAccountDataJSON = "[]";
     var debugInfo = "";
     var errorMessage = "";
     var username = Variable.GetValue("@username") || "User";
@@ -185,7 +186,7 @@
                 l1TradeJSON = l1TradeRecords.length > 0 ? Stringify(l1TradeRecords) : "[]";
                 
             } else if (activeTab == "signups") {
-                // Signups tab needs: Both signup performance datasets
+                // Signups tab needs: Both signup performance datasets + Pending Contacts
                 var signupPerformanceRecords = retrieveSignupPerformanceData();
                 debugInfo += "Signup_Performance: " + signupPerformanceRecords.length + " records. ";
                 signupPerformanceJSON = signupPerformanceRecords.length > 0 ? Stringify(signupPerformanceRecords) : "[]";
@@ -194,22 +195,26 @@
                 debugInfo += "SignupIdentifier_Performance: " + signupIdentifierPerformanceRecords.length + " records. ";
                 signupIdentifierPerformanceJSON = signupIdentifierPerformanceRecords.length > 0 ? Stringify(signupIdentifierPerformanceRecords) : "[]";
                 
+                // Load DOI Pending Contacts for regional breakdown display
+                var pendingContactsRecords = retrieveDOIPendingContacts();
+                debugInfo += "DOI_Pending_Contacts: " + pendingContactsRecords.length + " records. ";
+                pendingContactsJSON = pendingContactsRecords.length > 0 ? Stringify(pendingContactsRecords) : "[]";
+                
             } else if (activeTab == "myaccount") {
-                // MyAccount tab - PLACEHOLDER for future data retrieval
-                // When the MyAccount Data Extension is available, implement data retrieval here
-                // Expected data structure:
-                // - Total account registrations by date
-                // - Breakdown by primary trade
-                // - Breakdown by region/culture
-                // - Marketing opt-in status per account
+                // MyAccount tab - Load data from 'My Account' Data Extension
+                // Data structure per record:
+                // - id: unique identifier (primary key)
+                // - individualId: individual record identifier
+                // - contactId: contact record identifier (same across regions for multi-region users)
+                // - registrationDate: account registration date
+                // - userCulture: region/culture code (e.g., 'EN-GB', 'DE-DE')
+                // - primaryTrade: user's primary trade (nullable)
+                // - consentStatus: marketing consent status string
+                // - email: user email (masked for privacy in display)
                 //
-                // Example future implementation:
-                // var myAccountRecords = retrieveMyAccountData();
-                // debugInfo += "MyAccount: " + myAccountRecords.length + " records. ";
-                // myAccountDataJSON = myAccountRecords.length > 0 ? Stringify(myAccountRecords) : "[]";
-                //
-                // For now, the tab uses client-side demo data (myAccountDemoData in JavaScript)
-                debugInfo += "MyAccount: Using placeholder demo data (data extension not yet available). ";
+                var myAccountRecords = retrieveMyAccountData();
+                debugInfo += "MyAccount: " + myAccountRecords.length + " records. ";
+                myAccountDataJSON = myAccountRecords.length > 0 ? Stringify(myAccountRecords) : "[]";
                 
             // Note: History sub-tab handling removed - dashboard now shows 7-day data only
             }
@@ -1081,6 +1086,97 @@
         return allRecords;
     }
 
+    // Retrieve MyAccount data from 'My Account' Data Extension
+    // READ-ONLY: This function only retrieves data, no write operations
+    // Data Extension: 'My Account' (local DE, not shared)
+    // Fields: Id (PK), IndividualId, ContactId, RegistrationDate, UserCulture, PrimaryTrade (nullable), ConsentStatus, Email
+    function retrieveMyAccountData() {
+        var allRecords = [];
+        try {
+            var prox = new Script.Util.WSProxy();
+            var cols = ["Id", "IndividualId", "ContactId", "RegistrationDate", "UserCulture", "PrimaryTrade", "ConsentStatus", "Email"];
+            var moreData = true;
+            var reqID = null;
+            var batchCount = 0;
+            var maxBatches = 20; // Up to 50,000 records (2500 per batch)
+            var opts = { BatchSize: 2500 };
+            var props = {};
+            
+            while (moreData && batchCount < maxBatches) {
+                moreData = false;
+                if (reqID) { props.ContinueRequest = reqID; }
+                var data = prox.retrieve("DataExtensionObject[My Account]", cols, null, opts, props);
+                
+                if (data && data.Results) {
+                    moreData = data.HasMoreRows;
+                    reqID = data.RequestID;
+                    batchCount++;
+                    
+                    for (var j = 0; j < data.Results.length; j++) {
+                        var result = data.Results[j];
+                        var obj = {
+                            id: "",
+                            individualId: "",
+                            contactId: "",
+                            registrationDate: "",
+                            userCulture: "",
+                            primaryTrade: "",
+                            consentStatus: "",
+                            email: ""
+                        };
+                        
+                        // Map properties
+                        for (var k = 0; k < result.Properties.length; k++) {
+                            var prop = result.Properties[k];
+                            switch (prop.Name) {
+                                case "Id":
+                                    obj.id = prop.Value || "";
+                                    break;
+                                case "IndividualId":
+                                    obj.individualId = prop.Value || "";
+                                    break;
+                                case "ContactId":
+                                    obj.contactId = prop.Value || "";
+                                    break;
+                                case "RegistrationDate":
+                                    obj.registrationDate = formatDateValue(prop.Value);
+                                    break;
+                                case "UserCulture":
+                                    obj.userCulture = (prop.Value || "").toUpperCase();
+                                    break;
+                                case "PrimaryTrade":
+                                    obj.primaryTrade = prop.Value || "";
+                                    break;
+                                case "ConsentStatus":
+                                    obj.consentStatus = prop.Value || "";
+                                    break;
+                                case "Email":
+                                    // Mask email for privacy in display (store first 3 chars + domain)
+                                    var email = prop.Value || "";
+                                    if (email && email.indexOf("@") > 0) {
+                                        var parts = email.split("@");
+                                        var prefix = parts[0].length > 3 ? parts[0].substring(0, 3) + "***" : parts[0] + "***";
+                                        obj.email = prefix + "@" + parts[1];
+                                    } else {
+                                        obj.email = email;
+                                    }
+                                    break;
+                            }
+                        }
+                        allRecords.push(obj);
+                    }
+                }
+            }
+            
+            if (batchCount >= maxBatches && moreData) {
+                debugInfo += "MyAccount data truncated at " + (batchCount * 2500) + " records. ";
+            }
+        } catch (e) {
+            debugInfo += "Error in retrieveMyAccountData: " + Stringify(e) + ". ";
+        }
+        return allRecords;
+    }
+
     // Output data as JavaScript variables for the client-side UI to consume.
     Write('<script type="text/javascript">\n');
     Write('var dailySnapshotData = ' + dailySnapshotJSON + ';\n');
@@ -1090,6 +1186,7 @@
     Write('var signupPerformanceData = ' + signupPerformanceJSON + ';\n');
     Write('var signupIdentifierPerformanceData = ' + signupIdentifierPerformanceJSON + ';\n');
     Write('var pendingContactsData = ' + pendingContactsJSON + ';\n');
+    Write('var myAccountData = ' + myAccountDataJSON + ';\n');
     Write('var debugInfo = "' + debugInfo.replace(/"/g, '\\"') + '";\n');
     Write('var errorMsg = "' + errorMessage.replace(/"/g, '\\"') + '";\n');
     Write('var currentUser = "' + username.replace(/"/g, '\\"') + '";\n');
@@ -3870,18 +3967,18 @@
            MYACCOUNT TAB STYLES
            ========================================
            
-           PLACEHOLDER SECTION - DATA NOT YET AVAILABLE
+           MyAccount Analytics - Live Data Implementation
+           Updated: February 2026
            
            This section contains styles for the MyAccount campaign analytics tab.
-           As of December 2024, the MyAccount Data Extension is not yet populated
-           with data. This tab serves as a DEMONSTRATION LAYOUT to show the client
-           what the interface will look like once the data becomes available.
+           Data is retrieved from the 'My Account' Data Extension which contains:
+           - Id (primary key), IndividualId, ContactId
+           - RegistrationDate, UserCulture, PrimaryTrade (nullable)
+           - ConsentStatus, Email
            
-           The tab currently displays demo/placeholder data defined in JavaScript
-           (see myAccountDemoData object). When real data is available:
-           1. Implement retrieveMyAccountData() function in SSJS section
-           2. Update initializeMyAccountTab() to use real data
-           3. Remove the placeholder banner from HTML
+           ConsentStatus is mapped to Opted-In/Not Opted-In:
+           - Opted-In: 'Double Opt-In Verified', 'Single Opt-In'
+           - Not Opted-In: 'Not Opted-In', 'Withdrawn', or other values
            
            ======================================== */
         
@@ -4138,6 +4235,8 @@
         .myaccount-chart-card .chart-wrapper {
             position: relative;
             height: 250px;
+            overflow: hidden;
+            max-width: 100%;
         }
 
         .myaccount-optin-bar {
@@ -5218,26 +5317,26 @@
                      STATUS: PLACEHOLDER - DATA NOT YET AVAILABLE
                      Created: December 2024
                      
-                     This tab demonstrates the proposed layout for MyAccount campaign
-                     analytics. It shows DEMO DATA only - the values are not real.
+                     MyAccount Analytics - Live Data Implementation
+                     Updated: February 2026
                      
                      Purpose:
-                     - Show client the expected UI for MyAccount analytics
-                     - Display total accounts, opt-in rates, trade and region breakdowns
+                     - Display MyAccount registration analytics from live data
+                     - Show total accounts, opt-in rates, trade and region breakdowns
                      - Provide filtering by date range and user culture
                      
-                     When the MyAccount Data Extension is populated:
-                     1. Update the SSJS section to retrieve real data (see "myaccount" case)
-                     2. Update JavaScript functions to use real data instead of myAccountDemoData
-                     3. Remove the yellow placeholder banner below
-                     4. Test all filters and sorting functionality
+                     Data Source: 'My Account' Data Extension
+                     Fields:
+                     - Id (primary key), IndividualId, ContactId
+                     - RegistrationDate, UserCulture, PrimaryTrade (nullable)
+                     - ConsentStatus (mapped to opted-in/not opted-in), Email
                      
-                     Expected Data Fields:
-                     - Account registration date
-                     - User culture/region
-                     - Primary trade category
-                     - Marketing opt-in status (boolean)
-                     - Account ID / Email
+                     ConsentStatus Mapping:
+                     - Opted-In: 'Double Opt-In Verified', 'Single Opt-In'
+                     - Not Opted-In: 'Not Opted-In', 'Withdrawn', or other values
+                     
+                     Note: ContactId is shared across regions for multi-region users
+                     Dashboard shows both Total Accounts and Unique Contacts stats
                      
                      ================================================================ -->
                 <div class="tab-pane" id="myaccount-tab">
@@ -5245,34 +5344,34 @@
                     <div class="myaccount-section" id="myAccountSection">
                         <h2>MyAccount Campaign Analytics</h2>
                         
-                        <!-- Placeholder Banner -->
-                        <div class="myaccount-placeholder-banner">
-                            <div class="banner-icon">🚧</div>
+                        <!-- Placeholder Banner - Hidden when live data is available -->
+                        <div class="myaccount-placeholder-banner" style="display: none;">
+                            <div class="banner-icon">ℹ️</div>
                             <div class="banner-content">
-                                <h3>Placeholder Layout - Data Coming Soon</h3>
-                                <p>This tab demonstrates the proposed layout for MyAccount campaign data. The values shown below are sample data for demonstration purposes. Once the MyAccount data extension is populated, this tab will display real account registration metrics.</p>
+                                <h3>No Data Available</h3>
+                                <p>No data currently available. The My Account data extension may be empty or data is still being synced.</p>
                             </div>
                         </div>
                         
                         <!-- Stats Cards -->
                         <div class="myaccount-stats-grid" id="myAccountStatsGrid">
                             <div class="myaccount-stat-card">
-                                <div class="myaccount-stat-value" id="myaccountTotalAccounts">24,567</div>
+                                <div class="myaccount-stat-value" id="myaccountTotalAccounts">-</div>
                                 <div class="myaccount-stat-label">Total Accounts</div>
                                 <div class="myaccount-stat-sublabel">All registered MyAccount users</div>
                             </div>
                             <div class="myaccount-stat-card highlight">
-                                <div class="myaccount-stat-value" id="myaccountOptedIn">18,425</div>
+                                <div class="myaccount-stat-value" id="myaccountOptedIn">-</div>
                                 <div class="myaccount-stat-label">Marketing Opt-In</div>
-                                <div class="myaccount-stat-sublabel">75% of total accounts</div>
+                                <div class="myaccount-stat-sublabel">Opted-in accounts</div>
                             </div>
                             <div class="myaccount-stat-card secondary">
-                                <div class="myaccount-stat-value" id="myaccountRegions">19</div>
+                                <div class="myaccount-stat-value" id="myaccountRegions">-</div>
                                 <div class="myaccount-stat-label">Active Regions</div>
                                 <div class="myaccount-stat-sublabel">Cultures with registrations</div>
                             </div>
                             <div class="myaccount-stat-card secondary">
-                                <div class="myaccount-stat-value" id="myaccountTrades">8</div>
+                                <div class="myaccount-stat-value" id="myaccountTrades">-</div>
                                 <div class="myaccount-stat-label">Trade Categories</div>
                                 <div class="myaccount-stat-sublabel">Primary trade breakdown</div>
                             </div>
@@ -5281,17 +5380,16 @@
                         <!-- Marketing Opt-In Status Bar -->
                         <h3 style="font-size: 0.9rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 1rem; color: var(--text);">Marketing Opt-In Overview</h3>
                         <div class="myaccount-optin-bar" id="myaccountOptinBar">
-                            <div class="myaccount-optin-segment optin" style="width: 75%;">75%</div>
-                            <div class="myaccount-optin-segment optout" style="width: 25%;">25%</div>
+                            <div class="myaccount-optin-segment" style="width: 100%; background: #eee; color: #666;">Loading...</div>
                         </div>
                         <div class="myaccount-optin-legend">
                             <div class="myaccount-optin-legend-item">
                                 <div class="myaccount-optin-legend-dot optin"></div>
-                                <span>Opted In (<span id="myaccountOptinCount">18,425</span>)</span>
+                                <span>Opted In (<span id="myaccountOptinCount">-</span>)</span>
                             </div>
                             <div class="myaccount-optin-legend-item">
                                 <div class="myaccount-optin-legend-dot optout"></div>
-                                <span>Not Opted In (<span id="myaccountOptoutCount">6,142</span>)</span>
+                                <span>Not Opted In (<span id="myaccountOptoutCount">-</span>)</span>
                             </div>
                         </div>
                     </div>
@@ -5320,38 +5418,7 @@
                             <div class="myaccount-breakdown-card">
                                 <h4>By Primary Trade</h4>
                                 <ul class="myaccount-breakdown-list" id="myaccountTradeBreakdown">
-                                    <li>
-                                        <span class="breakdown-label">Electrician</span>
-                                        <span><span class="breakdown-value">7,890</span><span class="breakdown-percent">(32.1%)</span></span>
-                                    </li>
-                                    <li>
-                                        <span class="breakdown-label">Plumber</span>
-                                        <span><span class="breakdown-value">4,567</span><span class="breakdown-percent">(18.6%)</span></span>
-                                    </li>
-                                    <li>
-                                        <span class="breakdown-label">HVAC Technician</span>
-                                        <span><span class="breakdown-value">3,456</span><span class="breakdown-percent">(14.1%)</span></span>
-                                    </li>
-                                    <li>
-                                        <span class="breakdown-label">Carpenter</span>
-                                        <span><span class="breakdown-value">2,890</span><span class="breakdown-percent">(11.8%)</span></span>
-                                    </li>
-                                    <li>
-                                        <span class="breakdown-label">General Contractor</span>
-                                        <span><span class="breakdown-value">2,345</span><span class="breakdown-percent">(9.5%)</span></span>
-                                    </li>
-                                    <li>
-                                        <span class="breakdown-label">Mechanic</span>
-                                        <span><span class="breakdown-value">1,678</span><span class="breakdown-percent">(6.8%)</span></span>
-                                    </li>
-                                    <li>
-                                        <span class="breakdown-label">DIY Enthusiast</span>
-                                        <span><span class="breakdown-value">1,234</span><span class="breakdown-percent">(5.0%)</span></span>
-                                    </li>
-                                    <li>
-                                        <span class="breakdown-label">Other</span>
-                                        <span><span class="breakdown-value">507</span><span class="breakdown-percent">(2.1%)</span></span>
-                                    </li>
+                                    <li>Loading...</li>
                                 </ul>
                             </div>
                             
@@ -5359,46 +5426,7 @@
                             <div class="myaccount-breakdown-card">
                                 <h4>By Region (Top 10)</h4>
                                 <ul class="myaccount-breakdown-list" id="myaccountRegionBreakdown">
-                                    <li>
-                                        <span class="breakdown-label">DE-DE (Germany)</span>
-                                        <span><span class="breakdown-value">6,234</span><span class="breakdown-percent">(25.4%)</span></span>
-                                    </li>
-                                    <li>
-                                        <span class="breakdown-label">FR-FR (France)</span>
-                                        <span><span class="breakdown-value">4,123</span><span class="breakdown-percent">(16.8%)</span></span>
-                                    </li>
-                                    <li>
-                                        <span class="breakdown-label">EN-GB (United Kingdom)</span>
-                                        <span><span class="breakdown-value">3,456</span><span class="breakdown-percent">(14.1%)</span></span>
-                                    </li>
-                                    <li>
-                                        <span class="breakdown-label">IT-IT (Italy)</span>
-                                        <span><span class="breakdown-value">2,345</span><span class="breakdown-percent">(9.5%)</span></span>
-                                    </li>
-                                    <li>
-                                        <span class="breakdown-label">ES-ES (Spain)</span>
-                                        <span><span class="breakdown-value">2,123</span><span class="breakdown-percent">(8.6%)</span></span>
-                                    </li>
-                                    <li>
-                                        <span class="breakdown-label">NL-NL (Netherlands)</span>
-                                        <span><span class="breakdown-value">1,567</span><span class="breakdown-percent">(6.4%)</span></span>
-                                    </li>
-                                    <li>
-                                        <span class="breakdown-label">PL-PL (Poland)</span>
-                                        <span><span class="breakdown-value">1,234</span><span class="breakdown-percent">(5.0%)</span></span>
-                                    </li>
-                                    <li>
-                                        <span class="breakdown-label">DE-AT (Austria)</span>
-                                        <span><span class="breakdown-value">987</span><span class="breakdown-percent">(4.0%)</span></span>
-                                    </li>
-                                    <li>
-                                        <span class="breakdown-label">PT-PT (Portugal)</span>
-                                        <span><span class="breakdown-value">876</span><span class="breakdown-percent">(3.6%)</span></span>
-                                    </li>
-                                    <li>
-                                        <span class="breakdown-label">CS-CZ (Czech Republic)</span>
-                                        <span><span class="breakdown-value">765</span><span class="breakdown-percent">(3.1%)</span></span>
-                                    </li>
+                                    <li>Loading...</li>
                                 </ul>
                             </div>
                         </div>
@@ -5421,74 +5449,7 @@
                                 </thead>
                                 <tbody id="myaccountOptinTableBody">
                                     <tr>
-                                        <td>DE-DE (Germany)</td>
-                                        <td>6,234</td>
-                                        <td style="color: var(--success); font-weight: 700;">4,987</td>
-                                        <td style="color: var(--milwaukee-silver);">1,247</td>
-                                        <td><span style="color: var(--success); font-weight: 700;">80.0%</span></td>
-                                    </tr>
-                                    <tr>
-                                        <td>FR-FR (France)</td>
-                                        <td>4,123</td>
-                                        <td style="color: var(--success); font-weight: 700;">3,092</td>
-                                        <td style="color: var(--milwaukee-silver);">1,031</td>
-                                        <td><span style="color: var(--success); font-weight: 700;">75.0%</span></td>
-                                    </tr>
-                                    <tr>
-                                        <td>EN-GB (United Kingdom)</td>
-                                        <td>3,456</td>
-                                        <td style="color: var(--success); font-weight: 700;">2,592</td>
-                                        <td style="color: var(--milwaukee-silver);">864</td>
-                                        <td><span style="color: var(--success); font-weight: 700;">75.0%</span></td>
-                                    </tr>
-                                    <tr>
-                                        <td>IT-IT (Italy)</td>
-                                        <td>2,345</td>
-                                        <td style="color: var(--success); font-weight: 700;">1,876</td>
-                                        <td style="color: var(--milwaukee-silver);">469</td>
-                                        <td><span style="color: var(--success); font-weight: 700;">80.0%</span></td>
-                                    </tr>
-                                    <tr>
-                                        <td>ES-ES (Spain)</td>
-                                        <td>2,123</td>
-                                        <td style="color: var(--success); font-weight: 700;">1,486</td>
-                                        <td style="color: var(--milwaukee-silver);">637</td>
-                                        <td><span style="color: #ffa500; font-weight: 700;">70.0%</span></td>
-                                    </tr>
-                                    <tr>
-                                        <td>NL-NL (Netherlands)</td>
-                                        <td>1,567</td>
-                                        <td style="color: var(--success); font-weight: 700;">1,175</td>
-                                        <td style="color: var(--milwaukee-silver);">392</td>
-                                        <td><span style="color: var(--success); font-weight: 700;">75.0%</span></td>
-                                    </tr>
-                                    <tr>
-                                        <td>PL-PL (Poland)</td>
-                                        <td>1,234</td>
-                                        <td style="color: var(--success); font-weight: 700;">864</td>
-                                        <td style="color: var(--milwaukee-silver);">370</td>
-                                        <td><span style="color: #ffa500; font-weight: 700;">70.0%</span></td>
-                                    </tr>
-                                    <tr>
-                                        <td>DE-AT (Austria)</td>
-                                        <td>987</td>
-                                        <td style="color: var(--success); font-weight: 700;">789</td>
-                                        <td style="color: var(--milwaukee-silver);">198</td>
-                                        <td><span style="color: var(--success); font-weight: 700;">80.0%</span></td>
-                                    </tr>
-                                    <tr>
-                                        <td>PT-PT (Portugal)</td>
-                                        <td>876</td>
-                                        <td style="color: var(--success); font-weight: 700;">657</td>
-                                        <td style="color: var(--milwaukee-silver);">219</td>
-                                        <td><span style="color: var(--success); font-weight: 700;">75.0%</span></td>
-                                    </tr>
-                                    <tr>
-                                        <td>CS-CZ (Czech Republic)</td>
-                                        <td>765</td>
-                                        <td style="color: var(--success); font-weight: 700;">535</td>
-                                        <td style="color: var(--milwaukee-silver);">230</td>
-                                        <td><span style="color: #ffa500; font-weight: 700;">70.0%</span></td>
+                                        <td colspan="5" style="text-align: center; color: #666;">Loading...</td>
                                     </tr>
                                 </tbody>
                             </table>
@@ -11098,6 +11059,21 @@
             return dateGroups[sortedDates[0]];
         }
 
+        // Get pending DOI contacts for a specific signup identifier and region
+        function getPendingContactsForSignupRegion(signupIdentifier, region) {
+            if (typeof pendingContactsData === 'undefined' || !Array.isArray(pendingContactsData)) return 0;
+            const normalizedIdentifier = (signupIdentifier || '').trim().toUpperCase();
+            const normalizedRegion = (region || '').trim().toUpperCase();
+            
+            return pendingContactsData
+                .filter(item => {
+                    const itemIdentifier = (item.signupIdentifier || '').trim().toUpperCase();
+                    const itemRegion = (item.region || '').trim().toUpperCase();
+                    return itemIdentifier === normalizedIdentifier && itemRegion === normalizedRegion;
+                })
+                .reduce((sum, item) => sum + (item.pendingCount || 0), 0);
+        }
+
         // Render regional breakdown for a signup identifier
         function renderSignupRegionalBreakdown(signupIdentifier) {
             const regionalData = getRegionalDataForSignup(signupIdentifier);
@@ -11106,12 +11082,13 @@
                 return '<div class="signup-regional-content text-center text-secondary">No regional data available</div>';
             }
             
-            // Calculate totals
+            // Calculate totals (including pending contacts)
             const totals = regionalData.reduce((acc, item) => {
                 acc.participants += item.totalUniqueParticipants;
                 acc.newContacts += item.totalUniqueNewContacts;
+                acc.pendingContacts += getPendingContactsForSignupRegion(signupIdentifier, item.userCulture);
                 return acc;
-            }, { participants: 0, newContacts: 0 });
+            }, { participants: 0, newContacts: 0, pendingContacts: 0 });
             
             // Sort by participants descending
             const sortedData = [...regionalData].sort((a, b) => 
@@ -11124,6 +11101,10 @@
                         <div class="signup-regional-stat">
                             <div class="signup-regional-stat-value">${totals.participants.toLocaleString()}</div>
                             <div class="signup-regional-stat-label">Total Participants</div>
+                        </div>
+                        <div class="signup-regional-stat">
+                            <div class="signup-regional-stat-value">${totals.pendingContacts.toLocaleString()}</div>
+                            <div class="signup-regional-stat-label">Pending DOI</div>
                         </div>
                         <div class="signup-regional-stat">
                             <div class="signup-regional-stat-value">${totals.newContacts.toLocaleString()}</div>
@@ -11144,6 +11125,7 @@
                             <tr>
                                 <th>Region</th>
                                 <th>Participants</th>
+                                <th>Pending DOI</th>
                                 <th>New Contacts</th>
                                 <th>New Contact Rate</th>
                                 <th>% of Total</th>
@@ -11160,13 +11142,15 @@
                     ? ((item.totalUniqueParticipants / totals.participants) * 100).toFixed(1)
                     : 0;
                     
-                // Get culture info for flag
+                // Get culture info for flag and pending contacts for this region
                 const cultureInfo = getCultureInfo(item.userCulture);
+                const pendingCount = getPendingContactsForSignupRegion(signupIdentifier, item.userCulture);
                 
                 html += `
                     <tr>
                         <td>${cultureInfo.flag} ${item.userCulture}</td>
                         <td class="fw-bold">${item.totalUniqueParticipants.toLocaleString()}</td>
+                        <td>${pendingCount.toLocaleString()}</td>
                         <td>${item.totalUniqueNewContacts.toLocaleString()}</td>
                         <td>${newContactRate}%</td>
                         <td>${percentOfTotal}%</td>
@@ -12548,16 +12532,18 @@
             document.getElementById('pendingIdentifierCount').textContent = identifiersWithPending.size;
             
             // Update last updated timestamp
+            // SFMC returns US format (M/D/YYYY H:MM:SS AM/PM) but stores in UTC-6 offset from display timezone
             const lastUpdatedEl = document.getElementById('pendingLastUpdated');
             if (lastUpdated) {
                 const date = new Date(lastUpdated);
-                lastUpdatedEl.textContent = `Last updated: ${date.toLocaleDateString('en-GB', { 
-                    day: '2-digit', 
-                    month: 'short', 
-                    year: 'numeric',
-                    hour: '2-digit',
-                    minute: '2-digit'
-                })}`;
+                date.setHours(date.getHours() + 6); // Adjust to match SFMC Automation Studio display
+                const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+                const d = date.getDate();
+                const m = months[date.getMonth()];
+                const y = date.getFullYear();
+                const hh = String(date.getHours()).padStart(2, '0');
+                const mm = String(date.getMinutes()).padStart(2, '0');
+                lastUpdatedEl.textContent = `Last updated: ${d} ${m} ${y}, ${hh}:${mm}`;
             } else {
                 lastUpdatedEl.textContent = '';
             }
@@ -12748,92 +12734,252 @@
         // == MYACCOUNT TAB FUNCTIONS ======================================================
         // ==================================================================================
         //
-        // PLACEHOLDER SECTION - DATA NOT YET AVAILABLE
-        // Created: December 2025
+        // MyAccount Analytics - Live Data Implementation
+        // Updated: February 2026
         //
-        // This section contains JavaScript for the MyAccount analytics tab.
-        // Currently using DEMO DATA (myAccountDemoData) as the MyAccount Data Extension
-        // is not yet populated.
-        //
-        // When real data becomes available:
-        // 1. The SSJS section will retrieve data via retrieveMyAccountData()
-        // 2. Data will be passed to client as myAccountData variable (similar to other tabs)
-        // 3. Update these functions to use myAccountData instead of myAccountDemoData
-        // 4. Implement proper filtering in filterMyAccountData()
-        // 5. Implement table sorting in sortMyAccountTable()
-        // 6. Remove placeholder banner from HTML
-        //
-        // Expected data structure (per record):
+        // This section processes live data from the 'My Account' Data Extension.
+        // Data structure per record:
         // {
-        //   accountId: string,
-        //   registrationDate: date,
-        //   culture: string (e.g., 'DE-DE', 'FR-FR'),
-        //   primaryTrade: string (e.g., 'Electrician', 'Plumber'),
-        //   marketingOptIn: boolean,
-        //   email: string
+        //   id: string (primary key),
+        //   individualId: string,
+        //   contactId: string (same across regions for multi-region users),
+        //   registrationDate: date string,
+        //   userCulture: string (e.g., 'EN-GB', 'DE-DE'),
+        //   primaryTrade: string (nullable - may be blank or 'marketingapp.trades.none'),
+        //   consentStatus: string ('Double Opt-In Verified', 'Single Opt-In', 'Not Opted-In', 'Withdrawn'),
+        //   email: string (masked for privacy)
         // }
         //
+        // ConsentStatus mapping to Opted-In/Not Opted-In:
+        // - Opted-In: 'Double Opt-In Verified', 'Single Opt-In'
+        // - Not Opted-In: 'Not Opted-In', 'Withdrawn', or any other value
+        //
         // ==================================================================================
-
-        // MyAccount demo data - placeholder values for demonstration
-        // TODO: Replace with real data from myAccountData when Data Extension is available
-        const myAccountDemoData = {
-            totalAccounts: 24567,
-            optedIn: 18425,
-            optedOut: 6142,
-            activeRegions: 19,
-            tradeCategories: 8,
-            tradeBreakdown: [
-                { trade: 'Electrician', count: 7890, percent: 32.1 },
-                { trade: 'Plumber', count: 4567, percent: 18.6 },
-                { trade: 'HVAC Technician', count: 3456, percent: 14.1 },
-                { trade: 'Carpenter', count: 2890, percent: 11.8 },
-                { trade: 'General Contractor', count: 2345, percent: 9.5 },
-                { trade: 'Mechanic', count: 1678, percent: 6.8 },
-                { trade: 'DIY Enthusiast', count: 1234, percent: 5.0 },
-                { trade: 'Other', count: 507, percent: 2.1 }
-            ],
-            regionBreakdown: [
-                { region: 'DE-DE', name: 'Germany', count: 6234, percent: 25.4, optedIn: 4987, optinRate: 80.0 },
-                { region: 'FR-FR', name: 'France', count: 4123, percent: 16.8, optedIn: 3092, optinRate: 75.0 },
-                { region: 'EN-GB', name: 'United Kingdom', count: 3456, percent: 14.1, optedIn: 2592, optinRate: 75.0 },
-                { region: 'IT-IT', name: 'Italy', count: 2345, percent: 9.5, optedIn: 1876, optinRate: 80.0 },
-                { region: 'ES-ES', name: 'Spain', count: 2123, percent: 8.6, optedIn: 1486, optinRate: 70.0 },
-                { region: 'NL-NL', name: 'Netherlands', count: 1567, percent: 6.4, optedIn: 1175, optinRate: 75.0 },
-                { region: 'PL-PL', name: 'Poland', count: 1234, percent: 5.0, optedIn: 864, optinRate: 70.0 },
-                { region: 'DE-AT', name: 'Austria', count: 987, percent: 4.0, optedIn: 789, optinRate: 80.0 },
-                { region: 'PT-PT', name: 'Portugal', count: 876, percent: 3.6, optedIn: 657, optinRate: 75.0 },
-                { region: 'CS-CZ', name: 'Czech Republic', count: 765, percent: 3.1, optedIn: 535, optinRate: 70.0 }
-            ]
-        };
 
         // Chart instances for MyAccount tab
         let myAccountTradeChart = null;
         let myAccountRegionChart = null;
+        
+        // MyAccount state
+        let myAccountSortColumn = 'totalAccounts';
+        let myAccountSortDirection = 'desc';
+        
+        // Helper: Check if consent status is considered "opted in"
+        function isOptedIn(consentStatus) {
+            const status = (consentStatus || '').toLowerCase();
+            return status === 'double opt-in verified' || status === 'single opt-in';
+        }
+        
+        // Helper: Normalize trade name for display
+        function normalizeTradeForDisplay(trade) {
+            if (!trade || trade.trim() === '' || trade === 'marketingapp.trades.none') {
+                return 'Not Specified';
+            }
+            return trade;
+        }
+        
+        // Helper: Get region display name
+        function getRegionDisplayName(regionCode) {
+            const cultureInfo = getCultureInfo(regionCode);
+            return cultureInfo ? cultureInfo.name : regionCode;
+        }
+        
+        // Process raw MyAccount data into aggregated statistics
+        function processMyAccountData(rawData) {
+            if (!rawData || !Array.isArray(rawData) || rawData.length === 0) {
+                return {
+                    totalAccounts: 0,
+                    uniqueContacts: 0,
+                    optedIn: 0,
+                    optedOut: 0,
+                    activeRegions: 0,
+                    tradeCategories: 0,
+                    tradeBreakdown: [],
+                    regionBreakdown: [],
+                    consentBreakdown: []
+                };
+            }
+            
+            // Track unique contacts (by ContactId) for total vs unique stat
+            const uniqueContactIds = new Set();
+            
+            // Aggregation maps
+            const tradeMap = new Map();
+            const regionMap = new Map();
+            const consentMap = new Map();
+            
+            let optedInCount = 0;
+            let optedOutCount = 0;
+            
+            // Process each record
+            rawData.forEach(record => {
+                // Track unique contacts
+                if (record.contactId) {
+                    uniqueContactIds.add(record.contactId);
+                }
+                
+                // Count opt-in status
+                if (isOptedIn(record.consentStatus)) {
+                    optedInCount++;
+                } else {
+                    optedOutCount++;
+                }
+                
+                // Aggregate by trade
+                const tradeName = normalizeTradeForDisplay(record.primaryTrade);
+                if (!tradeMap.has(tradeName)) {
+                    tradeMap.set(tradeName, { trade: tradeName, count: 0, optedIn: 0 });
+                }
+                const tradeEntry = tradeMap.get(tradeName);
+                tradeEntry.count++;
+                if (isOptedIn(record.consentStatus)) {
+                    tradeEntry.optedIn++;
+                }
+                
+                // Aggregate by region/culture
+                const region = (record.userCulture || 'Unknown').toUpperCase();
+                if (!regionMap.has(region)) {
+                    regionMap.set(region, { 
+                        region: region, 
+                        name: getRegionDisplayName(region), 
+                        count: 0, 
+                        optedIn: 0,
+                        uniqueContacts: new Set()
+                    });
+                }
+                const regionEntry = regionMap.get(region);
+                regionEntry.count++;
+                if (isOptedIn(record.consentStatus)) {
+                    regionEntry.optedIn++;
+                }
+                if (record.contactId) {
+                    regionEntry.uniqueContacts.add(record.contactId);
+                }
+                
+                // Aggregate by consent status
+                const consent = record.consentStatus || 'Unknown';
+                if (!consentMap.has(consent)) {
+                    consentMap.set(consent, { status: consent, count: 0 });
+                }
+                consentMap.get(consent).count++;
+            });
+            
+            const totalAccounts = rawData.length;
+            
+            // Convert trade map to sorted array with percentages
+            const tradeBreakdown = Array.from(tradeMap.values())
+                .map(t => ({
+                    trade: t.trade,
+                    count: t.count,
+                    percent: totalAccounts > 0 ? Math.round((t.count / totalAccounts) * 1000) / 10 : 0,
+                    optedIn: t.optedIn,
+                    optinRate: t.count > 0 ? Math.round((t.optedIn / t.count) * 1000) / 10 : 0
+                }))
+                .sort((a, b) => b.count - a.count);
+            
+            // Convert region map to sorted array with percentages
+            const regionBreakdown = Array.from(regionMap.values())
+                .map(r => ({
+                    region: r.region,
+                    name: r.name,
+                    count: r.count,
+                    uniqueCount: r.uniqueContacts.size,
+                    percent: totalAccounts > 0 ? Math.round((r.count / totalAccounts) * 1000) / 10 : 0,
+                    optedIn: r.optedIn,
+                    optedOut: r.count - r.optedIn,
+                    optinRate: r.count > 0 ? Math.round((r.optedIn / r.count) * 1000) / 10 : 0
+                }))
+                .sort((a, b) => b.count - a.count);
+            
+            // Convert consent map to sorted array
+            const consentBreakdown = Array.from(consentMap.values())
+                .map(c => ({
+                    status: c.status,
+                    count: c.count,
+                    percent: totalAccounts > 0 ? Math.round((c.count / totalAccounts) * 1000) / 10 : 0
+                }))
+                .sort((a, b) => b.count - a.count);
+            
+            return {
+                totalAccounts: totalAccounts,
+                uniqueContacts: uniqueContactIds.size,
+                optedIn: optedInCount,
+                optedOut: optedOutCount,
+                activeRegions: regionMap.size,
+                tradeCategories: tradeMap.size - (tradeMap.has('Not Specified') ? 1 : 0), // Exclude "Not Specified" from count
+                tradeBreakdown: tradeBreakdown,
+                regionBreakdown: regionBreakdown,
+                consentBreakdown: consentBreakdown
+            };
+        }
 
         // Initialize MyAccount tab
         function initializeMyAccountTab() {
-            console.log('Initializing MyAccount tab...');
+            console.log('Initializing MyAccount tab with live data...');
             
-            // Render the charts
-            renderMyAccountTradeChart();
-            renderMyAccountRegionChart();
+            // Check if live data is available
+            const hasLiveData = typeof myAccountData !== 'undefined' && Array.isArray(myAccountData) && myAccountData.length > 0;
             
-            // Update stats (demo data is already in HTML, but this can be used for dynamic updates)
-            updateMyAccountStats();
+            if (hasLiveData) {
+                console.log('MyAccount: Processing ' + myAccountData.length + ' records from live data');
+                
+                // Hide placeholder banner
+                const banner = document.querySelector('.myaccount-placeholder-banner');
+                if (banner) {
+                    banner.style.display = 'none';
+                }
+                
+                // Process the data
+                const processedData = processMyAccountData(myAccountData);
+                
+                // Update all displays
+                updateMyAccountStats(processedData);
+                renderMyAccountTradeChart(processedData.tradeBreakdown);
+                renderMyAccountRegionChart(processedData.regionBreakdown);
+                renderMyAccountBreakdownLists(processedData);
+                renderMyAccountOptinTable(processedData.regionBreakdown);
+            } else {
+                console.log('MyAccount: No live data available, showing placeholder');
+                
+                // Show placeholder banner
+                const banner = document.querySelector('.myaccount-placeholder-banner');
+                if (banner) {
+                    banner.style.display = 'flex';
+                    banner.querySelector('.banner-content p').textContent = 
+                        'No data currently available. The My Account data extension may be empty or data is still being synced.';
+                }
+                
+                // Clear displays
+                updateMyAccountStatsEmpty();
+            }
         }
 
-        // Update MyAccount statistics display
-        function updateMyAccountStats() {
-            const data = myAccountDemoData;
-            const optinPercent = Math.round((data.optedIn / data.totalAccounts) * 100);
+        // Update MyAccount statistics display with live data
+        function updateMyAccountStats(data) {
+            const optinPercent = data.totalAccounts > 0 ? Math.round((data.optedIn / data.totalAccounts) * 100) : 0;
             const optoutPercent = 100 - optinPercent;
             
             // Update stat cards
-            document.getElementById('myaccountTotalAccounts').textContent = data.totalAccounts.toLocaleString();
-            document.getElementById('myaccountOptedIn').textContent = data.optedIn.toLocaleString();
-            document.getElementById('myaccountRegions').textContent = data.activeRegions;
-            document.getElementById('myaccountTrades').textContent = data.tradeCategories;
+            const totalEl = document.getElementById('myaccountTotalAccounts');
+            const optedInEl = document.getElementById('myaccountOptedIn');
+            const regionsEl = document.getElementById('myaccountRegions');
+            const tradesEl = document.getElementById('myaccountTrades');
+            
+            if (totalEl) totalEl.textContent = data.totalAccounts.toLocaleString();
+            if (optedInEl) optedInEl.textContent = data.optedIn.toLocaleString();
+            if (regionsEl) regionsEl.textContent = data.activeRegions;
+            if (tradesEl) tradesEl.textContent = data.tradeCategories;
+            
+            // Update sublabels to show unique contacts info
+            const totalSublabel = document.querySelector('#myAccountStatsGrid .myaccount-stat-card:first-child .myaccount-stat-sublabel');
+            if (totalSublabel && data.uniqueContacts !== data.totalAccounts) {
+                totalSublabel.textContent = data.uniqueContacts.toLocaleString() + ' unique contacts';
+            }
+            
+            const optinSublabel = document.querySelector('#myAccountStatsGrid .myaccount-stat-card.highlight .myaccount-stat-sublabel');
+            if (optinSublabel) {
+                optinSublabel.textContent = optinPercent + '% of total accounts';
+            }
             
             // Update opt-in bar
             const optinBar = document.getElementById('myaccountOptinBar');
@@ -12845,12 +12991,60 @@
             }
             
             // Update legend counts
-            document.getElementById('myaccountOptinCount').textContent = data.optedIn.toLocaleString();
-            document.getElementById('myaccountOptoutCount').textContent = data.optedOut.toLocaleString();
+            const optinCountEl = document.getElementById('myaccountOptinCount');
+            const optoutCountEl = document.getElementById('myaccountOptoutCount');
+            if (optinCountEl) optinCountEl.textContent = data.optedIn.toLocaleString();
+            if (optoutCountEl) optoutCountEl.textContent = data.optedOut.toLocaleString();
+        }
+        
+        // Update MyAccount stats to show empty state
+        function updateMyAccountStatsEmpty() {
+            const elements = ['myaccountTotalAccounts', 'myaccountOptedIn', 'myaccountRegions', 'myaccountTrades'];
+            elements.forEach(id => {
+                const el = document.getElementById(id);
+                if (el) el.textContent = '0';
+            });
+            
+            const optinBar = document.getElementById('myaccountOptinBar');
+            if (optinBar) {
+                optinBar.innerHTML = '<div class="myaccount-optin-segment" style="width: 100%; background: #ddd; color: #666;">No data</div>';
+            }
+            
+            const optinCountEl = document.getElementById('myaccountOptinCount');
+            const optoutCountEl = document.getElementById('myaccountOptoutCount');
+            if (optinCountEl) optinCountEl.textContent = '0';
+            if (optoutCountEl) optoutCountEl.textContent = '0';
+        }
+        
+        // Render breakdown lists
+        function renderMyAccountBreakdownLists(data) {
+            // Trade breakdown list
+            const tradeList = document.getElementById('myaccountTradeBreakdown');
+            if (tradeList) {
+                const tradeItems = data.tradeBreakdown.slice(0, 10).map(item => `
+                    <li>
+                        <span class="breakdown-label">${escapeHtml(item.trade)}</span>
+                        <span><span class="breakdown-value">${item.count.toLocaleString()}</span><span class="breakdown-percent">(${item.percent}%)</span></span>
+                    </li>
+                `).join('');
+                tradeList.innerHTML = tradeItems || '<li>No data available</li>';
+            }
+            
+            // Region breakdown list
+            const regionList = document.getElementById('myaccountRegionBreakdown');
+            if (regionList) {
+                const regionItems = data.regionBreakdown.slice(0, 10).map(item => `
+                    <li>
+                        <span class="breakdown-label">${item.region} (${escapeHtml(item.name)})</span>
+                        <span><span class="breakdown-value">${item.count.toLocaleString()}</span><span class="breakdown-percent">(${item.percent}%)</span></span>
+                    </li>
+                `).join('');
+                regionList.innerHTML = regionItems || '<li>No data available</li>';
+            }
         }
 
         // Render trade distribution doughnut chart
-        function renderMyAccountTradeChart() {
+        function renderMyAccountTradeChart(tradeData) {
             const canvas = document.getElementById('myaccountTradeChart');
             if (!canvas) return;
             
@@ -12861,7 +13055,24 @@
                 myAccountTradeChart.destroy();
             }
             
-            const data = myAccountDemoData.tradeBreakdown;
+            if (!tradeData || tradeData.length === 0) {
+                canvas.style.display = 'none';
+                return;
+            }
+            canvas.style.display = 'block';
+            
+            // Use top 8 trades for chart, combine rest into "Other"
+            let chartData = tradeData.slice(0, 7);
+            if (tradeData.length > 7) {
+                const otherCount = tradeData.slice(7).reduce((sum, t) => sum + t.count, 0);
+                const totalCount = tradeData.reduce((sum, t) => sum + t.count, 0);
+                chartData.push({
+                    trade: 'Other',
+                    count: otherCount,
+                    percent: totalCount > 0 ? Math.round((otherCount / totalCount) * 1000) / 10 : 0
+                });
+            }
+            
             const colors = [
                 '#DB021D', // Milwaukee Red
                 '#B50018', // Dark Red
@@ -12876,10 +13087,10 @@
             myAccountTradeChart = new Chart(ctx, {
                 type: 'doughnut',
                 data: {
-                    labels: data.map(item => item.trade),
+                    labels: chartData.map(item => item.trade),
                     datasets: [{
-                        data: data.map(item => item.count),
-                        backgroundColor: colors,
+                        data: chartData.map(item => item.count),
+                        backgroundColor: colors.slice(0, chartData.length),
                         borderColor: '#ffffff',
                         borderWidth: 2
                     }]
@@ -12887,22 +13098,26 @@
                 options: {
                     responsive: true,
                     maintainAspectRatio: false,
+                    layout: {
+                        padding: 0
+                    },
                     plugins: {
                         legend: {
-                            position: 'right',
+                            position: 'bottom',
                             labels: {
                                 color: '#333333',
-                                font: { size: 11 },
-                                padding: 10,
-                                usePointStyle: true
+                                font: { size: 10 },
+                                padding: 8,
+                                usePointStyle: true,
+                                boxWidth: 8
                             }
                         },
                         tooltip: {
                             callbacks: {
                                 label: function(context) {
                                     const value = context.raw.toLocaleString();
-                                    const percent = data[context.dataIndex].percent;
-                                    return `${context.label}: ${value} (${percent}%)`;
+                                    const item = chartData[context.dataIndex];
+                                    return `${context.label}: ${value} (${item.percent}%)`;
                                 }
                             }
                         }
@@ -12912,7 +13127,7 @@
         }
 
         // Render region distribution doughnut chart
-        function renderMyAccountRegionChart() {
+        function renderMyAccountRegionChart(regionData) {
             const canvas = document.getElementById('myaccountRegionChart');
             if (!canvas) return;
             
@@ -12923,7 +13138,15 @@
                 myAccountRegionChart.destroy();
             }
             
-            const data = myAccountDemoData.regionBreakdown;
+            if (!regionData || regionData.length === 0) {
+                canvas.style.display = 'none';
+                return;
+            }
+            canvas.style.display = 'block';
+            
+            // Use top 10 regions for chart
+            const chartData = regionData.slice(0, 10);
+            
             const colors = [
                 '#DB021D', // Milwaukee Red
                 '#B50018', // Dark Red
@@ -12940,10 +13163,10 @@
             myAccountRegionChart = new Chart(ctx, {
                 type: 'doughnut',
                 data: {
-                    labels: data.map(item => `${item.region} (${item.name})`),
+                    labels: chartData.map(item => `${item.region} (${item.name})`),
                     datasets: [{
-                        data: data.map(item => item.count),
-                        backgroundColor: colors,
+                        data: chartData.map(item => item.count),
+                        backgroundColor: colors.slice(0, chartData.length),
                         borderColor: '#ffffff',
                         borderWidth: 2
                     }]
@@ -12951,22 +13174,26 @@
                 options: {
                     responsive: true,
                     maintainAspectRatio: false,
+                    layout: {
+                        padding: 0
+                    },
                     plugins: {
                         legend: {
-                            position: 'right',
+                            position: 'bottom',
                             labels: {
                                 color: '#333333',
-                                font: { size: 11 },
-                                padding: 8,
-                                usePointStyle: true
+                                font: { size: 10 },
+                                padding: 6,
+                                usePointStyle: true,
+                                boxWidth: 8
                             }
                         },
                         tooltip: {
                             callbacks: {
                                 label: function(context) {
                                     const value = context.raw.toLocaleString();
-                                    const percent = data[context.dataIndex].percent;
-                                    return `${context.label}: ${value} (${percent}%)`;
+                                    const item = chartData[context.dataIndex];
+                                    return `${context.label}: ${value} (${item.percent}%)`;
                                 }
                             }
                         }
@@ -12974,49 +13201,202 @@
                 }
             });
         }
+        
+        // Render opt-in table by region
+        function renderMyAccountOptinTable(regionData) {
+            const tableBody = document.getElementById('myaccountOptinTableBody');
+            if (!tableBody) return;
+            
+            if (!regionData || regionData.length === 0) {
+                tableBody.innerHTML = '<tr><td colspan="5" style="text-align: center; color: #666;">No data available</td></tr>';
+                return;
+            }
+            
+            // Sort data based on current sort settings
+            let sortedData = [...regionData];
+            sortedData.sort((a, b) => {
+                let aVal, bVal;
+                switch (myAccountSortColumn) {
+                    case 'region':
+                        aVal = a.region;
+                        bVal = b.region;
+                        break;
+                    case 'totalAccounts':
+                        aVal = a.count;
+                        bVal = b.count;
+                        break;
+                    case 'optedIn':
+                        aVal = a.optedIn;
+                        bVal = b.optedIn;
+                        break;
+                    case 'optedOut':
+                        aVal = a.optedOut;
+                        bVal = b.optedOut;
+                        break;
+                    case 'optinRate':
+                        aVal = a.optinRate;
+                        bVal = b.optinRate;
+                        break;
+                    default:
+                        aVal = a.count;
+                        bVal = b.count;
+                }
+                
+                if (typeof aVal === 'string') {
+                    return myAccountSortDirection === 'asc' ? aVal.localeCompare(bVal) : bVal.localeCompare(aVal);
+                }
+                return myAccountSortDirection === 'asc' ? aVal - bVal : bVal - aVal;
+            });
+            
+            const rows = sortedData.map(item => {
+                const rateColor = item.optinRate >= 75 ? 'var(--success)' : item.optinRate >= 50 ? '#ffa500' : 'var(--milwaukee-red)';
+                return `
+                    <tr>
+                        <td>${item.region} (${escapeHtml(item.name)})</td>
+                        <td>${item.count.toLocaleString()}</td>
+                        <td style="color: var(--success); font-weight: 700;">${item.optedIn.toLocaleString()}</td>
+                        <td style="color: var(--milwaukee-silver);">${item.optedOut.toLocaleString()}</td>
+                        <td><span style="color: ${rateColor}; font-weight: 700;">${item.optinRate}%</span></td>
+                    </tr>
+                `;
+            }).join('');
+            
+            tableBody.innerHTML = rows;
+            
+            // Update table header sort indicators
+            updateMyAccountTableHeaders();
+        }
+        
+        // Update table header sort indicators
+        function updateMyAccountTableHeaders() {
+            const headers = document.querySelectorAll('#myaccountOptinTable thead th.sortable');
+            headers.forEach(th => {
+                th.classList.remove('sort-asc', 'sort-desc');
+            });
+            
+            // Find the current sorted column header and add indicator
+            const columnMap = {
+                'region': 0,
+                'totalAccounts': 1,
+                'optedIn': 2,
+                'optedOut': 3,
+                'optinRate': 4
+            };
+            
+            const headerIndex = columnMap[myAccountSortColumn];
+            if (headerIndex !== undefined && headers[headerIndex]) {
+                headers[headerIndex].classList.add(myAccountSortDirection === 'asc' ? 'sort-asc' : 'sort-desc');
+            }
+        }
 
-        // Filter MyAccount data (placeholder - demonstrates filter handling)
+        // Filter MyAccount data
         function filterMyAccountData() {
-            const dateFrom = document.getElementById('myaccountDateFrom').value;
-            const dateTo = document.getElementById('myaccountDateTo').value;
-            const culture = document.getElementById('myaccountCulture').value;
+            const dateFrom = document.getElementById('myaccountDateFrom')?.value || '';
+            const dateTo = document.getElementById('myaccountDateTo')?.value || '';
+            const culture = document.getElementById('myaccountCulture')?.value || '';
             
             // Store filter values in tabState
             tabState.filters.myaccount = { dateFrom, dateTo, culture };
             
             console.log('MyAccount filters applied:', { dateFrom, dateTo, culture });
             
-            // In a real implementation, this would filter the data and re-render
-            // For the placeholder, we just log the filter values
-            // When real data is available, add filtering logic here similar to other tabs
+            // Check if live data is available
+            if (typeof myAccountData === 'undefined' || !Array.isArray(myAccountData)) {
+                console.log('No MyAccount data available for filtering');
+                return;
+            }
             
-            // Demonstrate filter application with a console message
+            // Filter the data
+            let filteredData = [...myAccountData];
+            
+            // Filter by date range
+            if (dateFrom) {
+                const fromDate = new Date(dateFrom);
+                filteredData = filteredData.filter(record => {
+                    const regDate = new Date(record.registrationDate);
+                    return regDate >= fromDate;
+                });
+            }
+            
+            if (dateTo) {
+                const toDate = new Date(dateTo);
+                toDate.setHours(23, 59, 59, 999); // Include full day
+                filteredData = filteredData.filter(record => {
+                    const regDate = new Date(record.registrationDate);
+                    return regDate <= toDate;
+                });
+            }
+            
+            // Filter by culture/region
             if (culture) {
-                console.log(`Filtering MyAccount data for culture: ${culture}`);
+                filteredData = filteredData.filter(record => 
+                    record.userCulture && record.userCulture.toUpperCase() === culture.toUpperCase()
+                );
             }
-            if (dateFrom || dateTo) {
-                console.log(`Filtering MyAccount data for date range: ${dateFrom || 'any'} to ${dateTo || 'any'}`);
-            }
+            
+            console.log('Filtered MyAccount data: ' + filteredData.length + ' records');
+            
+            // Process and re-render
+            const processedData = processMyAccountData(filteredData);
+            updateMyAccountStats(processedData);
+            renderMyAccountTradeChart(processedData.tradeBreakdown);
+            renderMyAccountRegionChart(processedData.regionBreakdown);
+            renderMyAccountBreakdownLists(processedData);
+            renderMyAccountOptinTable(processedData.regionBreakdown);
         }
 
         // Clear MyAccount filters
         function clearMyAccountFilters() {
-            document.getElementById('myaccountDateFrom').value = '';
-            document.getElementById('myaccountDateTo').value = '';
-            document.getElementById('myaccountCulture').value = '';
+            const dateFromEl = document.getElementById('myaccountDateFrom');
+            const dateToEl = document.getElementById('myaccountDateTo');
+            const cultureEl = document.getElementById('myaccountCulture');
+            
+            if (dateFromEl) dateFromEl.value = '';
+            if (dateToEl) dateToEl.value = '';
+            if (cultureEl) cultureEl.value = '';
             
             tabState.filters.myaccount = { dateFrom: '', dateTo: '', culture: '' };
             
             console.log('MyAccount filters cleared');
             
-            // Re-render with unfiltered demo data
-            updateMyAccountStats();
+            // Re-initialize with full data
+            initializeMyAccountTab();
         }
 
-        // Sort MyAccount table (placeholder function for future use)
+        // Sort MyAccount table
         function sortMyAccountTable(column) {
-            console.log('Sorting MyAccount table by:', column);
-            // When real data is available, implement sorting similar to other tables
+            // Toggle direction if same column, otherwise default to descending
+            if (myAccountSortColumn === column) {
+                myAccountSortDirection = myAccountSortDirection === 'asc' ? 'desc' : 'asc';
+            } else {
+                myAccountSortColumn = column;
+                myAccountSortDirection = 'desc';
+            }
+            
+            console.log('Sorting MyAccount table by:', column, myAccountSortDirection);
+            
+            // Re-render the table with current data
+            if (typeof myAccountData !== 'undefined' && Array.isArray(myAccountData) && myAccountData.length > 0) {
+                // Apply any current filters
+                const filters = tabState.filters.myaccount || {};
+                let filteredData = [...myAccountData];
+                
+                if (filters.dateFrom) {
+                    const fromDate = new Date(filters.dateFrom);
+                    filteredData = filteredData.filter(r => new Date(r.registrationDate) >= fromDate);
+                }
+                if (filters.dateTo) {
+                    const toDate = new Date(filters.dateTo);
+                    toDate.setHours(23, 59, 59, 999);
+                    filteredData = filteredData.filter(r => new Date(r.registrationDate) <= toDate);
+                }
+                if (filters.culture) {
+                    filteredData = filteredData.filter(r => r.userCulture && r.userCulture.toUpperCase() === filters.culture.toUpperCase());
+                }
+                
+                const processedData = processMyAccountData(filteredData);
+                renderMyAccountOptinTable(processedData.regionBreakdown);
+            }
         }
     </script>
     

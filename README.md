@@ -96,6 +96,7 @@ The dashboard queries the following Data Extensions (see `DATA_EXTENSION_SCHEMA.
 - **Regional_Email_Metrics_Milwaukee**: Aggregated regional email performance metrics
 - **SendFact_Milwaukee**: Individual email campaign send data
 - **SignupIdentifier_Performance_Milwaukee**: Signup source performance (Shared DE with `ENT.` prefix)
+- **My Account**: MyAccount registration data with consent status (local DE)
 
 ### Authentication
 - OAuth 2.0 integration with Marketing Cloud
@@ -142,6 +143,7 @@ Ensure your Marketing Cloud instance has the following Data Extensions:
 | `Regional_Email_Metrics_Milwaukee` | YearNumber, MonthNumber, Region, + metrics | Regional email performance |
 | `SendFact_Milwaukee` | JobID, EmailName, SendDate, Region, + metrics | Campaign-level data |
 | `ENT.SignupIdentifier_Performance_Milwaukee` | SnapshotDate, SignupIdentifier, Region | Signup source metrics (Shared DE) |
+| `My Account` | Id, ContactId, RegistrationDate, UserCulture, ConsentStatus | MyAccount registrations |
 
 See `DATA_EXTENSION_SCHEMA.md` for complete field definitions.
 

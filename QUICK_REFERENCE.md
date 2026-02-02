@@ -335,6 +335,47 @@ The Overview tab now includes a "Pending DOI Confirmations" section that shows:
 
 ---
 
+## 🔄 Feature: MyAccount Analytics (February 2026)
+
+The MyAccount tab displays registration analytics from the 'My Account' Data Extension:
+
+**Key Metrics:**
+- Total Accounts vs Unique Contacts (by ContactId)
+- Marketing Opt-In / Not Opted-In counts and percentages
+- Active Regions count
+- Trade Categories breakdown
+
+**Data Processing:**
+- Raw records are aggregated client-side into statistics
+- ConsentStatus is mapped to opted-in/not opted-in categories
+- PrimaryTrade normalizes blank/invalid values to "Not Specified"
+- ContactId used to identify unique users across multiple regions
+
+**ConsentStatus Mapping:**
+```javascript
+// Opted-In statuses:
+'Double Opt-In Verified' -> Opted-In
+'Single Opt-In' -> Opted-In
+
+// Not Opted-In statuses:
+'Not Opted-In' -> Not Opted-In
+'Withdrawn' -> Not Opted-In
+(any other value) -> Not Opted-In
+```
+
+**Key Functions:**
+- `retrieveMyAccountData()` - SSJS function to retrieve DE records (read-only)
+- `processMyAccountData()` - Client-side aggregation of raw records
+- `isOptedIn()` - Helper to check consent status
+- `normalizeTradeForDisplay()` - Normalizes blank/invalid trade values
+
+**Data Source:**
+- **DE Name:** `My Account` (local DE, no ENT. prefix)
+- **Primary Key:** Id
+- **Key Fields:** ContactId (for unique users), UserCulture, ConsentStatus, PrimaryTrade
+
+---
+
 **Remember:** Premature optimization is the root of all evil, but these patterns are proven winners! 🏆
 
-*Last Updated: 26 January 2026*
+*Last Updated: 2 February 2026*

@@ -134,6 +134,47 @@ These are the Data Extensions queried by the dashboard's SSJS code.
 
 ---
 
+## A.6 My Account
+
+**Purpose:** MyAccount registration data for registered users. Contains user account information, trade preferences, and marketing consent status. Used for MyAccount analytics tab.
+
+**Note:** This is a local Data Extension (no `ENT.` prefix required). Data is currently updated manually/weekly.
+
+| Field Name | Data Type | Length | Primary Key | Nullable | Description |
+|------------|-----------|--------|-------------|----------|-------------|
+| Id | Text | 50 | ✓ | No | Unique account identifier (Salesforce ID format) |
+| IndividualId | Text | 50 | No | No | Individual record identifier |
+| ContactId | Text | 50 | No | No | Contact record identifier (shared across regions for multi-region users) |
+| RegistrationDate | Date | - | No | No | Date the user registered their MyAccount |
+| UserCulture | Text | 50 | No | No | User's culture/region code (e.g., 'EN-GB', 'DE-DE', 'IT-IT') |
+| PrimaryTrade | Text | 50 | No | Yes | User's primary trade/profession (nullable - may be blank or 'marketingapp.trades.none') |
+| ConsentStatus | Text | 50 | No | No | Marketing consent status (see mapping below) |
+| Email | Text | 254 | No | No | User's email address |
+
+**Primary Key:** Id
+
+**ConsentStatus Values and Dashboard Mapping:**
+
+| ConsentStatus Value | Dashboard Category | Description |
+|---------------------|-------------------|-------------|
+| `Double Opt-In Verified` | Opted-In | User completed double opt-in verification |
+| `Single Opt-In` | Opted-In | User opted in via single opt-in |
+| `Not Opted-In` | Not Opted-In | User has not opted in to marketing |
+| `Withdrawn` | Not Opted-In | User previously opted in but has withdrawn consent |
+| *(other/blank)* | Not Opted-In | Any other value treated as not opted in |
+
+**Important Notes:**
+- `ContactId` is the same for users who have registered across multiple regions. Use this to calculate unique contacts vs total accounts.
+- `PrimaryTrade` may be blank, empty, or contain `marketingapp.trades.none` for users who haven't specified a trade. The dashboard normalizes these to "Not Specified".
+- Email addresses are masked in the dashboard display for privacy (shows first 3 characters + domain).
+
+**Dashboard Usage:**
+- MyAccount tab: Total accounts, opt-in rates, trade distribution, region breakdown
+- Supports filtering by date range and culture/region
+- Shows both Total Accounts (all records) and Unique Contacts (by ContactId)
+
+---
+
 # Section B: Automation Pipeline Data Extensions
 
 These Data Extensions are used by Automation Studio SQL Query Activities to aggregate email metrics. See `AUTOMATION_STUDIO_TASKS.md` for the SQL queries.
