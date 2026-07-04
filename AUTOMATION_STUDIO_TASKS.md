@@ -12,6 +12,10 @@ The data pipeline consists of multiple SQL Query Activities that extract, transf
 
 ## Task 1: Populate Regional Monthly Metrics Staging
 
+**Automation:** `Reporting_MonthlyRegionalMetrics`
+
+**Activity Name:** `Reporting_RegionalMetrics_1`
+
 **Activity Type:** SQL Query Activity
 
 **Purpose:** Extract subscriber-level email event data with regional information for staging.
@@ -74,7 +78,7 @@ SELECT DISTINCT
         WHEN LOWER(jn.JourneyName) LIKE '%pt-pt%' THEN 'PT-PT'
         WHEN LOWER(jn.JourneyName) LIKE '%ro-ro%' THEN 'RO-RO'
         WHEN LOWER(jn.JourneyName) LIKE '%sk-sk%' THEN 'SK-SK'
-        WHEN LOWER(jn.JourneyName) LIKE '%sl-sl%' THEN 'SL-SL'
+        WHEN LOWER(jn.JourneyName) LIKE '%sl-si%' THEN 'SL-SI'
         WHEN LOWER(jn.JourneyName) LIKE '%sv-se%' THEN 'SV-SE'
         WHEN LOWER(jn.JourneyName) LIKE '%tr-tr%' THEN 'TR-TR'
         
@@ -108,7 +112,7 @@ SELECT DISTINCT
         WHEN LOWER(j.EmailName) LIKE '%pt-pt%' THEN 'PT-PT'
         WHEN LOWER(j.EmailName) LIKE '%ro-ro%' THEN 'RO-RO'
         WHEN LOWER(j.EmailName) LIKE '%sk-sk%' THEN 'SK-SK'
-        WHEN LOWER(j.EmailName) LIKE '%sl-sl%' THEN 'SL-SL'
+        WHEN LOWER(j.EmailName) LIKE '%sl-si%' THEN 'SL-SI'
         WHEN LOWER(j.EmailName) LIKE '%sv-se%' THEN 'SV-SE'
         WHEN LOWER(j.EmailName) LIKE '%tr-tr%' THEN 'TR-TR'
         
@@ -155,20 +159,10 @@ INNER JOIN _JourneyActivity ja ON j.TriggererSendDefinitionObjectID = ja.Journey
 INNER JOIN _Journey jn ON ja.VersionID = jn.VersionID
 WHERE s.EventDate >= DATEFROMPARTS(YEAR(GETDATE()), MONTH(GETDATE()), 1) 
     AND s.EventDate < DATEADD(MONTH, 1, DATEFROMPARTS(YEAR(GETDATE()), MONTH(GETDATE()), 1))
-    /* Exclude dynamic/transactional emails that serve all regions */
-    AND jn.JourneyName NOT LIKE '%DOI%'
-    AND jn.JourneyName NOT LIKE '%Confirmation%'
-    AND jn.JourneyName NOT LIKE '%Summary Email%'
-    AND jn.JourneyName NOT LIKE '%Proof%'
-    AND jn.JourneyName NOT LIKE '%Password Reset%'
-    AND jn.JourneyName NOT LIKE '%Account Created%'
-    AND jn.JourneyName NOT LIKE '%Project Status%'
-    AND jn.JourneyName NOT LIKE '%Customisation Summary%'
+    AND j.SendClassificationType = 'Default Commercial'
     AND LOWER(jn.JourneyName) NOT LIKE '%test%'
-    AND jn.JourneyName NOT LIKE '%_202_______%'
-    /* Exclude test send category */
     AND (j.Category IS NULL OR j.Category != 'Test Send Emails')
-    AND j.EmailSubject NOT LIKE '[Test]%'
+    AND j.EmailSubject NOT LIKE '[[]Test]%'
 ```
 
 **Key Features:**
@@ -199,6 +193,8 @@ WHERE s.EventDate >= DATEFROMPARTS(YEAR(GETDATE()), MONTH(GETDATE()), 1)
 
 ### Task 1b: Update Staging with Bounce Events
 
+**Activity Name:** `Reporting_RegionalMetrics_2`
+
 **Target Data Extension:** `Regional_Monthly_Metrics_Staging_DE`
 
 **Action:** Update
@@ -222,6 +218,8 @@ WHERE b.IsUnique = 1
 ```
 
 ### Task 1c: Update Staging with Open Events
+
+**Activity Names:** `Reporting_RegionalMetrics_3` (Unique Opens) and `Reporting_RegionalMetrics_3b` (Total Opens)
 
 **Target Data Extension:** `Regional_Monthly_Metrics_Staging_DE`
 
@@ -265,6 +263,8 @@ GROUP BY s.JobID, s.ListID, s.BatchID, s.SubscriberID
 
 ### Task 1d: Update Staging with Click Events
 
+**Activity Names:** `Reporting_RegionalMetrics_4` (Unique Clicks) and `Reporting_RegionalMetrics_4b` (Total Clicks)
+
 **Target Data Extension:** `Regional_Monthly_Metrics_Staging_DE`
 
 **Action:** Update
@@ -289,10 +289,10 @@ WHERE c.IsUnique = 1
 
 -- Total Clicks (not just unique)
 SELECT 
-    c.JobID, 
-    c.ListID, 
-    c.BatchID, 
-    c.SubscriberID, 
+    s.JobID, 
+    s.ListID, 
+    s.BatchID, 
+    s.SubscriberID, 
     COUNT(*) AS TotalClicks 
 FROM _Click c 
 INNER JOIN Regional_Monthly_Metrics_Staging_DE s 
@@ -302,10 +302,12 @@ INNER JOIN Regional_Monthly_Metrics_Staging_DE s
     AND c.SubscriberID = s.SubscriberID 
 WHERE c.EventDate >= DATEFROMPARTS(YEAR(GETDATE()), MONTH(GETDATE()), 1) 
     AND c.EventDate < DATEADD(MONTH, 1, DATEFROMPARTS(YEAR(GETDATE()), MONTH(GETDATE()), 1))
-GROUP BY c.JobID, c.ListID, c.BatchID, c.SubscriberID
+GROUP BY s.JobID, s.ListID, s.BatchID, s.SubscriberID
 ```
 
 ### Task 1e: Update Staging with Unsubscribe Events
+
+**Activity Name:** `Reporting_RegionalMetrics_5`
 
 **Target Data Extension:** `Regional_Monthly_Metrics_Staging_DE`
 
@@ -349,6 +351,10 @@ WHERE u.EventDate >= DATEFROMPARTS(YEAR(GETDATE()), MONTH(GETDATE()), 1)
 ---
 
 ## Task 3: Aggregate Regional Monthly Metrics
+
+**Automation:** `Reporting_MonthlyRegionalMetrics`
+
+**Activity Name:** `Reporting_RegionalMetrics_6`
 
 **Activity Type:** SQL Query Activity
 
@@ -534,6 +540,8 @@ LEFT JOIN (
             WHEN LOWER(JourneyName) LIKE '%hu-hu%' THEN 'HU-HU'
             WHEN LOWER(JourneyName) LIKE '%ro-ro%' THEN 'RO-RO'
             WHEN LOWER(JourneyName) LIKE '%bg-bg%' THEN 'BG-BG'
+            WHEN LOWER(JourneyName) LIKE '%sl-si%' THEN 'SL-SI'
+            WHEN LOWER(JourneyName) LIKE '%hr-hr%' THEN 'HR-HR'
             WHEN LOWER(JourneyName) LIKE '%pt-pt%' THEN 'PT-PT'
             WHEN LOWER(JourneyName) LIKE '%lb-lu%' OR LOWER(JourneyName) LIKE '%fr-lu%' THEN 'FR-LU'
             WHEN LOWER(JourneyName) LIKE '%et-ee%' THEN 'ET-EE'
@@ -578,6 +586,8 @@ LEFT JOIN (
             WHEN LOWER(j2.EmailName) LIKE '%hu-hu%' THEN 'HU-HU'
             WHEN LOWER(j2.EmailName) LIKE '%ro-ro%' THEN 'RO-RO'
             WHEN LOWER(j2.EmailName) LIKE '%bg-bg%' THEN 'BG-BG'
+            WHEN LOWER(j2.EmailName) LIKE '%sl-si%' THEN 'SL-SI'
+            WHEN LOWER(j2.EmailName) LIKE '%hr-hr%' THEN 'HR-HR'
             WHEN LOWER(j2.EmailName) LIKE '%pt-pt%' THEN 'PT-PT'
             WHEN LOWER(j2.EmailName) LIKE '%lb-lu%' OR LOWER(j2.EmailName) LIKE '%fr-lu%' THEN 'FR-LU'
             WHEN LOWER(j2.EmailName) LIKE '%et-ee%' THEN 'ET-EE'
@@ -647,7 +657,8 @@ HAVING COALESCE(jr.Region, er.ExtractedRegion, 'Unknown') != 'Unknown'
 - Western Europe: EN-GB, DE-DE, FR-FR, ES-ES, IT-IT, NL-NL, PT-PT
 - DACH: DE-AT, DE-CH, FR-CH, IT-CH
 - Nordics: DA-DK, SV-SE, NB-NO, FI-FI
-- Central/Eastern Europe: PL-PL, CS-CZ, SK-SK, HU-HU, RO-RO, BG-BG
+- Eastern Europe (EE): PL-PL, CS-CZ, SK-SK, HU-HU, RO-RO
+- IRIS: BG-BG, SL-SI, HR-HR
 - Benelux: FR-BE, NL-BE, FR-LU
 - Baltics: ET-EE, LV-LV, LT-LT
 - Other: EN-US, EN-ZA, AR-AE, TR-TR
@@ -924,23 +935,31 @@ GROUP BY
 
 ## Automation Sequence
 
-The tasks should be organized into one or more Automations with the following dependency structure:
+The tasks are organized into the following Automations.
 
-### Automation 1: Daily Metrics Collection (Runs at 2:00 AM)
+### Automation: `Reporting_MonthlyRegionalMetrics`
 
-1. **Task 1:** Populate Regional Monthly Metrics Staging
-2. **Task 2:** Populate Monthly Metrics Staging (Non-Regional)
-3. **Task 5:** Capture Campaign-Level Email Metrics
+Runs all Task 1 activities (staging population + event updates) followed by the regional aggregation (Task 3):
 
-*These tasks run in parallel as they have no dependencies on each other*
+1. `Reporting_RegionalMetrics_1` — Task 1: Populate Regional Monthly Metrics Staging
+2. `Reporting_RegionalMetrics_2` — Task 1b: Update Staging with Bounce Events
+3. `Reporting_RegionalMetrics_3` — Task 1c: Update Staging with Unique Opens
+4. `Reporting_RegionalMetrics_3b` — Task 1c: Update Staging with Total Opens
+5. `Reporting_RegionalMetrics_4` — Task 1d: Update Staging with Unique Clicks
+6. `Reporting_RegionalMetrics_4b` — Task 1d: Update Staging with Total Clicks
+7. `Reporting_RegionalMetrics_5` — Task 1e: Update Staging with Unsubscribe Events
+8. `Reporting_RegionalMetrics_6` — Task 3: Aggregate Regional Monthly Metrics into `Regional_Monthly_Metrics_Final_DE`
 
-### Automation 2: Daily Metrics Aggregation (Runs at 3:00 AM)
+*Activities run sequentially because each event-update step depends on the staging populated by step 1.*
 
-1. **Task 3:** Aggregate Regional Monthly Metrics
-2. **Task 4:** Aggregate Overall Monthly Metrics
-3. **Task 6:** Populate L1 Trade Daily Snapshot
+### Other Automations
 
-*These tasks run after the staging tasks complete*
+- **Task 2** (Populate Monthly Metrics Staging — non-regional) and **Task 4** (Aggregate Overall Monthly Metrics) — separate automation for global/non-regional metrics.
+- **Task 5** (Capture Campaign-Level Email Metrics) — separate automation populating `Campaign_Metrics_DE`.
+- **Task 6** (Populate L1 Trade Daily Snapshot) — separate automation populating `L1_Trade_Daily_Snapshot_Milwaukee`.
+- **Task 7** (DOI Pending Contacts Aggregation) — separate automation, runs daily at 6:00 AM.
+- **Task 8** (`MYACCOUNT_DASHBOARD_AGGREGATION_DAILY`) — MyAccount aggregation automation.
+- **Task 9** (`Daily_Send_Metrics_Aggregation`) — 8-step automation populating `Send_JobID_Staging`, `Send_Engagement_Staging`, and `Send_Fact` for the last 7 days of sends.
 
 ---
 
@@ -1089,6 +1108,7 @@ WHERE SendDate < DATEADD(MONTH, -12, GETDATE())
 | 2025-12-15 | Investigation | **Task 1 Updated:** Fixed "Region Not Found" issue (was showing 27,119 when actual undetectable was ~7,400). Added EmailName fallback patterns, " - XX" suffix support for Re-engagement emails, compound suffix patterns (DEAT, FRBE, etc.), and additional transactional email exclusions. |
 | 2026-01-26 | Enhancement | **Task 7 Added:** DOI Pending Contacts Aggregation for dashboard pending contacts monitoring feature. |
 | 2026-01-27 | Enhancement | **Task 7 Updated:** Added SignupIdentifier grouping to support dual views (by Region and by Signup Identifier) in the dashboard. |
+| 2026-05-07 | Enhancement | **Task 8 Added:** MyAccount dashboard aggregation automation. Added staging and summary SQL activities to replace raw CloudPage retrieval of My Account rows, support full account counts, and improve MyAccount tab performance. |
 
 ---
 
@@ -1253,4 +1273,998 @@ FROM DOI_Pending_Contacts_Aggregated
 
 ---
 
-*Last Updated: 27 January 2026*
+## Task 8: Aggregate MyAccount Registration Data for Dashboard
+
+**Activity Type:** SQL Query Activities
+
+**Purpose:** Aggregate MyAccount registration data into dashboard-ready Data Extensions so the CloudPage no longer needs to retrieve every raw `My Account` row via SSJS/WSProxy. This resolves raw-row retrieval limits, improves MyAccount tab load time, and ensures the dashboard can report against the full MyAccount data set.
+
+**Source Data Extension:** `My Account` local Data Extension
+
+**Automation Name:** `MYACCOUNT_DASHBOARD_AGGREGATION_DAILY`
+
+**Recommended Schedule:** Daily, after the `My Account` Data Extension has been refreshed
+
+**Important:** Create the target Data Extension fields in the exact order shown below. SFMC Query Activities map selected columns to target fields by field order as well as name, and mismatched order can cause errors such as `Could not convert date and/or time from string data type`.
+
+### Source Fields Used
+
+| Source Field | Purpose |
+|--------------|---------|
+| `Id` | Account-level unique identifier |
+| `ContactId` | Used for unique contact counts |
+| `RegistrationDate` | Used for date filtering and daily aggregation |
+| `UserCulture` | Used for region/culture filtering and breakdowns |
+| `PrimaryTrade` | Used for trade filtering and trade breakdowns |
+| `ConsentStatus` | Used for opted-in/not opted-in classification |
+
+### Consent Status Mapping
+
+| ConsentStatus Value | Dashboard Category |
+|---------------------|-------------------|
+| `Double Opt-In Verified` | Opted-In |
+| `Single Opt-In` | Opted-In |
+| `Not Opted-In` | Not Opted-In |
+| `Withdrawn` | Not Opted-In |
+| Other or blank | Not Opted-In |
+
+### Primary Trade Normalisation
+
+Blank, empty, null, or `marketingapp.trades.none` values are normalised to `Not Specified`.
+
+---
+
+### Target Data Extension: `MyAccount_Normalised_Staging`
+
+**Purpose:** Cleaned account-level staging table used by all summary queries.
+
+**Sendable:** No
+
+**Action:** Overwrite
+
+| Field Name | Data Type | Length / Scale | Primary Key | Nullable |
+|------------|-----------|----------------|-------------|----------|
+| `Id` | Text | 50 | Yes | No |
+| `ContactId` | Text | 50 | No | Yes |
+| `RegistrationDate` | Date | - | No | No |
+| `RegistrationDateOnly` | Date | - | No | No |
+| `UserCulture` | Text | 50 | No | No |
+| `PrimaryTradeRaw` | Text | 100 | No | Yes |
+| `PrimaryTradeNormalised` | Text | 100 | No | No |
+| `ConsentStatus` | Text | 50 | No | No |
+| `ConsentCategory` | Text | 20 | No | No |
+| `InsertedDate` | Date | - | No | No |
+
+---
+
+### Target Data Extension: `MyAccount_Daily_Summary`
+
+**Purpose:** Daily headline totals for the MyAccount tab.
+
+**Sendable:** No
+
+**Action:** Overwrite
+
+| Field Name | Data Type | Length / Scale | Primary Key | Nullable |
+|------------|-----------|----------------|-------------|----------|
+| `RegistrationDateOnly` | Date | - | Yes | No |
+| `TotalAccounts` | Number | - | No | No |
+| `UniqueContacts` | Number | - | No | No |
+| `MarketingOptedIn` | Number | - | No | No |
+| `MarketingNotOptedIn` | Number | - | No | No |
+| `ActiveRegions` | Number | - | No | No |
+| `TradeCategories` | Number | - | No | No |
+| `OptInRatePct` | Decimal | 6,2 | No | No |
+| `InsertedDate` | Date | - | No | No |
+
+---
+
+### Target Data Extension: `MyAccount_Daily_Region_Summary`
+
+**Purpose:** Daily account and opt-in totals by culture/region.
+
+**Sendable:** No
+
+**Action:** Overwrite
+
+| Field Name | Data Type | Length / Scale | Primary Key | Nullable |
+|------------|-----------|----------------|-------------|----------|
+| `RegistrationDateOnly` | Date | - | Yes | No |
+| `UserCulture` | Text | 50 | Yes | No |
+| `TotalAccounts` | Number | - | No | No |
+| `UniqueContacts` | Number | - | No | No |
+| `MarketingOptedIn` | Number | - | No | No |
+| `MarketingNotOptedIn` | Number | - | No | No |
+| `OptInRatePct` | Decimal | 6,2 | No | No |
+| `InsertedDate` | Date | - | No | No |
+
+---
+
+### Target Data Extension: `MyAccount_Daily_Trade_Summary`
+
+**Purpose:** Daily account and opt-in totals by primary trade.
+
+**Sendable:** No
+
+**Action:** Overwrite
+
+| Field Name | Data Type | Length / Scale | Primary Key | Nullable |
+|------------|-----------|----------------|-------------|----------|
+| `RegistrationDateOnly` | Date | - | Yes | No |
+| `PrimaryTradeNormalised` | Text | 100 | Yes | No |
+| `TotalAccounts` | Number | - | No | No |
+| `MarketingOptedIn` | Number | - | No | No |
+| `MarketingNotOptedIn` | Number | - | No | No |
+| `OptInRatePct` | Decimal | 6,2 | No | No |
+| `InsertedDate` | Date | - | No | No |
+
+---
+
+### Target Data Extension: `MyAccount_Daily_Region_Trade_Summary`
+
+**Purpose:** Supports combined date, culture and trade filtering.
+
+**Sendable:** No
+
+**Action:** Overwrite
+
+| Field Name | Data Type | Length / Scale | Primary Key | Nullable |
+|------------|-----------|----------------|-------------|----------|
+| `RegistrationDateOnly` | Date | - | Yes | No |
+| `UserCulture` | Text | 50 | Yes | No |
+| `PrimaryTradeNormalised` | Text | 100 | Yes | No |
+| `TotalAccounts` | Number | - | No | No |
+| `UniqueContacts` | Number | - | No | No |
+| `MarketingOptedIn` | Number | - | No | No |
+| `MarketingNotOptedIn` | Number | - | No | No |
+| `OptInRatePct` | Decimal | 6,2 | No | No |
+| `InsertedDate` | Date | - | No | No |
+
+---
+
+### Target Data Extension: `MyAccount_Daily_Consent_Summary`
+
+**Purpose:** Daily consent status breakdown.
+
+**Sendable:** No
+
+**Action:** Overwrite
+
+| Field Name | Data Type | Length / Scale | Primary Key | Nullable |
+|------------|-----------|----------------|-------------|----------|
+| `RegistrationDateOnly` | Date | - | Yes | No |
+| `ConsentStatus` | Text | 50 | Yes | No |
+| `ConsentCategory` | Text | 20 | Yes | No |
+| `TotalAccounts` | Number | - | No | No |
+| `PercentOfTotal` | Decimal | 6,2 | No | No |
+| `InsertedDate` | Date | - | No | No |
+
+---
+
+### Task 8a: Build MyAccount Normalised Staging
+
+**Activity Name:** `01 - Build MyAccount Normalised Staging`
+
+**Target Data Extension:** `MyAccount_Normalised_Staging`
+
+**Action:** Overwrite
+
+**SQL Query:**
+```sql
+SELECT
+    Id,
+    ContactId,
+    RegistrationDate,
+    CONVERT(DATE, RegistrationDate) AS RegistrationDateOnly,
+
+    CASE
+        WHEN UserCulture IS NULL OR LTRIM(RTRIM(UserCulture)) = ''
+        THEN 'UNKNOWN'
+        ELSE UPPER(LTRIM(RTRIM(UserCulture)))
+    END AS UserCulture,
+
+    PrimaryTrade AS PrimaryTradeRaw,
+
+    CASE
+        WHEN PrimaryTrade IS NULL
+          OR LTRIM(RTRIM(PrimaryTrade)) = ''
+          OR LOWER(LTRIM(RTRIM(PrimaryTrade))) = 'marketingapp.trades.none'
+        THEN 'Not Specified'
+        ELSE LTRIM(RTRIM(PrimaryTrade))
+    END AS PrimaryTradeNormalised,
+
+    CASE
+        WHEN ConsentStatus IS NULL OR LTRIM(RTRIM(ConsentStatus)) = ''
+        THEN 'Unknown'
+        ELSE LTRIM(RTRIM(ConsentStatus))
+    END AS ConsentStatus,
+
+    CASE
+        WHEN LTRIM(RTRIM(ConsentStatus)) IN ('Double Opt-In Verified', 'Single Opt-In')
+        THEN 'Opted-In'
+        ELSE 'Not Opted-In'
+    END AS ConsentCategory,
+
+    GETDATE() AS InsertedDate
+
+FROM [My Account]
+
+WHERE Id IS NOT NULL
+  AND LTRIM(RTRIM(Id)) <> ''
+  AND RegistrationDate IS NOT NULL
+```
+
+**Key Features:**
+- Converts `RegistrationDate` into a date-only value for filtering and grouping
+- Normalises `UserCulture` to uppercase
+- Normalises blank or invalid `PrimaryTrade` values to `Not Specified`
+- Maps consent statuses into `Opted-In` and `Not Opted-In`
+- Creates a clean staging table used by all downstream summary queries
+
+---
+
+### Task 8b: Build MyAccount Daily Summary
+
+**Activity Name:** `02 - Build MyAccount Daily Summary`
+
+**Target Data Extension:** `MyAccount_Daily_Summary`
+
+**Action:** Overwrite
+
+**SQL Query:**
+```sql
+SELECT
+    RegistrationDateOnly,
+
+    COUNT(*) AS TotalAccounts,
+
+    COUNT(DISTINCT
+        CASE
+            WHEN ContactId IS NOT NULL
+             AND LTRIM(RTRIM(ContactId)) <> ''
+            THEN ContactId
+            ELSE NULL
+        END
+    ) AS UniqueContacts,
+
+    SUM(
+        CASE
+            WHEN ConsentCategory = 'Opted-In'
+            THEN 1
+            ELSE 0
+        END
+    ) AS MarketingOptedIn,
+
+    SUM(
+        CASE
+            WHEN ConsentCategory = 'Not Opted-In'
+            THEN 1
+            ELSE 0
+        END
+    ) AS MarketingNotOptedIn,
+
+    COUNT(DISTINCT UserCulture) AS ActiveRegions,
+
+    COUNT(DISTINCT
+        CASE
+            WHEN PrimaryTradeNormalised <> 'Not Specified'
+            THEN PrimaryTradeNormalised
+            ELSE NULL
+        END
+    ) AS TradeCategories,
+
+    CAST(
+        CASE
+            WHEN COUNT(*) > 0
+            THEN
+                SUM(
+                    CASE
+                        WHEN ConsentCategory = 'Opted-In'
+                        THEN 1
+                        ELSE 0
+                    END
+                ) * 100.0 / COUNT(*)
+            ELSE 0
+        END
+        AS DECIMAL(6,2)
+    ) AS OptInRatePct,
+
+    GETDATE() AS InsertedDate
+
+FROM MyAccount_Normalised_Staging
+
+GROUP BY
+    RegistrationDateOnly
+```
+
+**Key Features:**
+- Provides daily total account counts
+- Calculates unique contacts using `ContactId`
+- Calculates opted-in and not opted-in account counts
+- Provides active region and trade category counts for headline cards
+
+---
+
+### Task 8c: Build MyAccount Daily Region Summary
+
+**Activity Name:** `03 - Build MyAccount Daily Region Summary`
+
+**Target Data Extension:** `MyAccount_Daily_Region_Summary`
+
+**Action:** Overwrite
+
+**SQL Query:**
+```sql
+SELECT
+    CAST(RegistrationDateOnly AS DATE) AS RegistrationDateOnly,
+    UserCulture,
+
+    COUNT(*) AS TotalAccounts,
+
+    COUNT(DISTINCT
+        CASE
+            WHEN ContactId IS NOT NULL
+             AND LTRIM(RTRIM(ContactId)) <> ''
+            THEN ContactId
+            ELSE NULL
+        END
+    ) AS UniqueContacts,
+
+    SUM(
+        CASE
+            WHEN ConsentCategory = 'Opted-In'
+            THEN 1
+            ELSE 0
+        END
+    ) AS MarketingOptedIn,
+
+    SUM(
+        CASE
+            WHEN ConsentCategory = 'Not Opted-In'
+            THEN 1
+            ELSE 0
+        END
+    ) AS MarketingNotOptedIn,
+
+    CAST(
+        CASE
+            WHEN COUNT(*) > 0
+            THEN
+                SUM(
+                    CASE
+                        WHEN ConsentCategory = 'Opted-In'
+                        THEN 1
+                        ELSE 0
+                    END
+                ) * 100.0 / COUNT(*)
+            ELSE 0
+        END
+        AS DECIMAL(6,2)
+    ) AS OptInRatePct,
+
+    GETDATE() AS InsertedDate
+
+FROM MyAccount_Normalised_Staging
+
+WHERE RegistrationDateOnly IS NOT NULL
+  AND UserCulture IS NOT NULL
+  AND LTRIM(RTRIM(UserCulture)) <> ''
+
+GROUP BY
+    CAST(RegistrationDateOnly AS DATE),
+    UserCulture
+```
+
+**Key Features:**
+- Powers the region breakdown and regional opt-in table
+- Supports date and culture filtering
+- Includes a safer date cast in the SELECT and GROUP BY
+- Requires target DE field order to start with `RegistrationDateOnly`, then `UserCulture`
+
+---
+
+### Task 8d: Build MyAccount Daily Trade Summary
+
+**Activity Name:** `04 - Build MyAccount Daily Trade Summary`
+
+**Target Data Extension:** `MyAccount_Daily_Trade_Summary`
+
+**Action:** Overwrite
+
+**SQL Query:**
+```sql
+SELECT
+    RegistrationDateOnly,
+    PrimaryTradeNormalised,
+
+    COUNT(*) AS TotalAccounts,
+
+    SUM(
+        CASE
+            WHEN ConsentCategory = 'Opted-In'
+            THEN 1
+            ELSE 0
+        END
+    ) AS MarketingOptedIn,
+
+    SUM(
+        CASE
+            WHEN ConsentCategory = 'Not Opted-In'
+            THEN 1
+            ELSE 0
+        END
+    ) AS MarketingNotOptedIn,
+
+    CAST(
+        CASE
+            WHEN COUNT(*) > 0
+            THEN
+                SUM(
+                    CASE
+                        WHEN ConsentCategory = 'Opted-In'
+                        THEN 1
+                        ELSE 0
+                    END
+                ) * 100.0 / COUNT(*)
+            ELSE 0
+        END
+        AS DECIMAL(6,2)
+    ) AS OptInRatePct,
+
+    GETDATE() AS InsertedDate
+
+FROM MyAccount_Normalised_Staging
+
+GROUP BY
+    RegistrationDateOnly,
+    PrimaryTradeNormalised
+```
+
+**Key Features:**
+- Powers the primary trade breakdown
+- Includes `Not Specified` trade records for complete account totals
+- Calculates trade-level opt-in rates
+
+---
+
+### Task 8e: Build MyAccount Daily Region Trade Summary
+
+**Activity Name:** `05 - Build MyAccount Daily Region Trade Summary`
+
+**Target Data Extension:** `MyAccount_Daily_Region_Trade_Summary`
+
+**Action:** Overwrite
+
+**SQL Query:**
+```sql
+SELECT
+    RegistrationDateOnly,
+    UserCulture,
+    PrimaryTradeNormalised,
+
+    COUNT(*) AS TotalAccounts,
+
+    COUNT(DISTINCT
+        CASE
+            WHEN ContactId IS NOT NULL
+             AND LTRIM(RTRIM(ContactId)) <> ''
+            THEN ContactId
+            ELSE NULL
+        END
+    ) AS UniqueContacts,
+
+    SUM(
+        CASE
+            WHEN ConsentCategory = 'Opted-In'
+            THEN 1
+            ELSE 0
+        END
+    ) AS MarketingOptedIn,
+
+    SUM(
+        CASE
+            WHEN ConsentCategory = 'Not Opted-In'
+            THEN 1
+            ELSE 0
+        END
+    ) AS MarketingNotOptedIn,
+
+    CAST(
+        CASE
+            WHEN COUNT(*) > 0
+            THEN
+                SUM(
+                    CASE
+                        WHEN ConsentCategory = 'Opted-In'
+                        THEN 1
+                        ELSE 0
+                    END
+                ) * 100.0 / COUNT(*)
+            ELSE 0
+        END
+        AS DECIMAL(6,2)
+    ) AS OptInRatePct,
+
+    GETDATE() AS InsertedDate
+
+FROM MyAccount_Normalised_Staging
+
+GROUP BY
+    RegistrationDateOnly,
+    UserCulture,
+    PrimaryTradeNormalised
+```
+
+**Key Features:**
+- Supports combined culture and trade filtering
+- Prevents the CloudPage from needing raw account-level records for filtered views
+- Includes unique contact counts at region/trade grain
+
+---
+
+### Task 8f: Build MyAccount Daily Consent Summary
+
+**Activity Name:** `06 - Build MyAccount Daily Consent Summary`
+
+**Target Data Extension:** `MyAccount_Daily_Consent_Summary`
+
+**Action:** Overwrite
+
+**SQL Query:**
+```sql
+SELECT
+    s.RegistrationDateOnly,
+    s.ConsentStatus,
+    s.ConsentCategory,
+
+    COUNT(*) AS TotalAccounts,
+
+    CAST(
+        CASE
+            WHEN d.TotalAccounts > 0
+            THEN COUNT(*) * 100.0 / d.TotalAccounts
+            ELSE 0
+        END
+        AS DECIMAL(6,2)
+    ) AS PercentOfTotal,
+
+    GETDATE() AS InsertedDate
+
+FROM MyAccount_Normalised_Staging s
+
+INNER JOIN (
+    SELECT
+        RegistrationDateOnly,
+        COUNT(*) AS TotalAccounts
+    FROM MyAccount_Normalised_Staging
+    GROUP BY RegistrationDateOnly
+) d
+    ON s.RegistrationDateOnly = d.RegistrationDateOnly
+
+GROUP BY
+    s.RegistrationDateOnly,
+    s.ConsentStatus,
+    s.ConsentCategory,
+    d.TotalAccounts
+```
+
+**Key Features:**
+- Provides breakdown by original `ConsentStatus`
+- Preserves the dashboard's higher-level `Opted-In` vs `Not Opted-In` grouping
+- Calculates status share of daily total accounts
+
+---
+
+### MyAccount Aggregation Output Usage
+
+The CloudPage should retrieve these aggregated Data Extensions instead of retrieving raw rows from `My Account`.
+
+| Dashboard Requirement | Recommended Data Source |
+|-----------------------|-------------------------|
+| Headline total accounts | `MyAccount_Daily_Summary` |
+| Headline opted-in and not opted-in totals | `MyAccount_Daily_Summary` |
+| Headline active regions | `MyAccount_Daily_Summary` |
+| Headline trade categories | `MyAccount_Daily_Summary` |
+| Region breakdown | `MyAccount_Daily_Region_Summary` |
+| Trade breakdown | `MyAccount_Daily_Trade_Summary` |
+| Combined culture and trade filtering | `MyAccount_Daily_Region_Trade_Summary` |
+| Consent status breakdown | `MyAccount_Daily_Consent_Summary` |
+
+**Important Unique Contacts Note:**
+`UniqueContacts` should not be summed blindly across grouped rows, because a single `ContactId` can exist across multiple regions. Use the most appropriate summary grain for the current filter state.
+
+---
+
+### Verification Queries
+
+```sql
+-- Check staging row count against source My Account count
+SELECT COUNT(*) AS StagingRows
+FROM MyAccount_Normalised_Staging
+```
+
+```sql
+-- Check total accounts from daily summary
+SELECT SUM(TotalAccounts) AS TotalAccounts
+FROM MyAccount_Daily_Summary
+```
+
+```sql
+-- Check opted-in and not opted-in totals reconcile to total accounts
+SELECT
+    SUM(TotalAccounts) AS TotalAccounts,
+    SUM(MarketingOptedIn) AS MarketingOptedIn,
+    SUM(MarketingNotOptedIn) AS MarketingNotOptedIn,
+    SUM(MarketingOptedIn) + SUM(MarketingNotOptedIn) AS ConsentTotal
+FROM MyAccount_Daily_Summary
+```
+
+```sql
+-- Check region totals reconcile to total accounts
+SELECT
+    SUM(TotalAccounts) AS RegionSummaryTotal
+FROM MyAccount_Daily_Region_Summary
+```
+
+```sql
+-- Check trade totals reconcile to total accounts
+SELECT
+    SUM(TotalAccounts) AS TradeSummaryTotal
+FROM MyAccount_Daily_Trade_Summary
+```
+
+```sql
+-- Check top regions by account volume
+SELECT
+    UserCulture,
+    SUM(TotalAccounts) AS TotalAccounts,
+    SUM(MarketingOptedIn) AS MarketingOptedIn,
+    SUM(MarketingNotOptedIn) AS MarketingNotOptedIn
+FROM MyAccount_Daily_Region_Summary
+GROUP BY UserCulture
+ORDER BY TotalAccounts DESC
+```
+
+```sql
+-- Check top trades by account volume
+SELECT
+    PrimaryTradeNormalised,
+    SUM(TotalAccounts) AS TotalAccounts,
+    SUM(MarketingOptedIn) AS MarketingOptedIn,
+    SUM(MarketingNotOptedIn) AS MarketingNotOptedIn
+FROM MyAccount_Daily_Trade_Summary
+GROUP BY PrimaryTradeNormalised
+ORDER BY TotalAccounts DESC
+```
+
+```sql
+-- Check latest automation run timestamp
+SELECT
+    MAX(InsertedDate) AS LastUpdated
+FROM MyAccount_Daily_Summary
+```
+
+---
+
+### Troubleshooting
+
+#### Issue: Step 3 fails with `Could not convert date and/or time from string data type`
+
+**Most likely cause:** The target Data Extension field order does not match the SELECT column order. For `MyAccount_Daily_Region_Summary`, the first field must be `RegistrationDateOnly` as Date and the second field must be `UserCulture` as Text.
+
+**Fix:** Recreate `MyAccount_Daily_Region_Summary` with this exact field order:
+1. `RegistrationDateOnly` - Date, Primary Key
+2. `UserCulture` - Text 50, Primary Key
+3. `TotalAccounts` - Number
+4. `UniqueContacts` - Number
+5. `MarketingOptedIn` - Number
+6. `MarketingNotOptedIn` - Number
+7. `OptInRatePct` - Decimal 6,2
+8. `InsertedDate` - Date
+
+#### Issue: Dashboard account total is lower than the My Account DE row count
+
+**Possible Causes:**
+1. Staging query excluded rows with blank `Id` or blank `RegistrationDate`
+2. Automation has not run after the latest My Account refresh
+3. CloudPage is still using the old raw `retrieveMyAccountData()` function instead of aggregate DE retrieval
+
+**Solutions:**
+1. Compare source and staging counts
+2. Check the latest `InsertedDate` in the summary DEs
+3. Update the CloudPage MyAccount tab to use the new aggregate DEs
+
+#### Issue: Unique contact totals differ between tables
+
+**Cause:** `UniqueContacts` is calculated at the table grain. A contact can exist in more than one region, so summed region-level unique contacts may be higher than headline unique contacts.
+
+**Solution:** Use `MyAccount_Daily_Summary` for headline unique contact totals and use region/trade tables only for their specific breakdown grain.
+
+---
+
+### MyAccount Automation Sequence
+
+1. **Task 8a:** Build MyAccount Normalised Staging
+2. **Task 8b:** Build MyAccount Daily Summary
+3. **Task 8c:** Build MyAccount Daily Region Summary
+4. **Task 8d:** Build MyAccount Daily Trade Summary
+5. **Task 8e:** Build MyAccount Daily Region Trade Summary
+6. **Task 8f:** Build MyAccount Daily Consent Summary
+
+Task 8a must run first. Tasks 8b-8f can run after Task 8a has completed successfully.
+
+
+---
+
+## Task 9: Daily Send Metrics Aggregation (Send_Fact)
+
+**Automation:** `Daily_Send_Metrics_Aggregation`
+
+**Purpose:** Build the per-send `Send_Fact` table that powers the dashboard's individual campaign send view. Captures send metadata (subject, preheader, campaign, journey, market) from `ENT.Sendlog_Email` joined with engagement counts (bounces, opens, clicks, unsubscribes, complaints) from the System Data Views for sends in the last 7 days.
+
+**Source:** System Data Views (`_Sent`, `_Job`, `_Journey`, `_JourneyActivity`, `_Bounce`, `_Open`, `_Click`, `_Unsubscribe`, `_Complaint`) and Shared DE `ENT.Sendlog_Email` (MID `510007388`)
+
+**Target Data Extensions:**
+- `Send_JobID_Staging` (overwrite) — send metadata
+- `Send_Engagement_Staging` (overwrite + updates) — per-JobID engagement counts
+- `Send_Fact` (update) — final consolidated send fact table
+
+**Lookback Window:** Last 7 full days (`EventDate >= DATEADD(DAY, -7, GETDATE())` AND `< CAST(GETDATE() AS DATE)`)
+
+**Schedule:** Daily
+
+### Step 1: `Daily_Send_Metrics_Aggregation_1` — Populate Send Metadata Staging
+
+**Target Data Extension:** `Send_JobID_Staging`
+
+**Action:** Overwrite
+
+```sql
+SELECT DISTINCT
+    s.JobID
+    , j.EmailID
+    , j.EmailName
+    , COALESCE(MAX(sl.Subject), MAX(j.EmailSubject)) AS SubjectLine
+    , COALESCE(MAX(sl.Preheader), '') AS Preheader
+    , MAX(sl.CampaignName) AS CampaignName
+    , MAX(jn.JourneyID) AS JourneyID
+    , MAX(jn.JourneyName) AS JourneyName
+    , MAX(sl.UserCulture) AS UserCulture
+    , MAX(sl.CountryCode) AS Market
+    , MIN(s.EventDate) AS SentDateTime
+FROM _Sent AS s
+    JOIN _Job AS j 
+        ON s.JobID = j.JobID
+    LEFT JOIN _JourneyActivity AS ja 
+        ON j.TriggererSendDefinitionObjectID = ja.JourneyActivityObjectID
+    LEFT JOIN _Journey AS jn 
+        ON ja.VersionID = jn.VersionID
+    LEFT JOIN ENT.Sendlog_Email AS sl 
+        ON s.JobID = sl.JobID 
+        AND s.SubscriberKey = sl.SubscriberKey
+        AND sl.MID = '510007388'
+WHERE s.EventDate >= DATEADD(DAY, -7, CAST(GETDATE() AS DATE))
+    AND s.EventDate < CAST(GETDATE() AS DATE)
+    AND (j.Category IS NULL OR j.Category <> 'Test Send Emails')
+    AND j.EmailSubject NOT LIKE '[[]Test]%'
+    AND LOWER(j.EmailName) NOT LIKE '%test%'
+GROUP BY s.JobID, j.EmailID, j.EmailName
+```
+
+**Key Features:**
+- Pulls human-readable subject/preheader/campaign from `ENT.Sendlog_Email` (MID-filtered)
+- Falls back to `_Job.EmailSubject` when no Sendlog row exists
+- Excludes test/template sends by targeting genuine test markers (Category `Test Send Emails`, `[Test]`-prefixed subject, `test` in EmailName) instead of any `%` character — this preserves legitimate personalized subjects such as `%%First Name%%`
+- Captures earliest send timestamp per JobID via `MIN(s.EventDate)`
+
+### Step 2: `Daily_Send_Metrics_Aggregation_2` — Initialise Engagement Staging with TotalSent
+
+**Target Data Extension:** `Send_Engagement_Staging`
+
+**Action:** Overwrite
+
+```sql
+SELECT
+    s.JobID
+    , COUNT(DISTINCT s.SubscriberKey) AS TotalSent
+    , CAST(NULL AS INT) AS TotalHardBounces
+    , CAST(NULL AS INT) AS TotalSoftBounces
+    , CAST(NULL AS INT) AS TotalBounced
+    , CAST(NULL AS INT) AS TotalUniqueOpens
+    , CAST(NULL AS INT) AS TotalOpens
+    , CAST(NULL AS INT) AS TotalUniqueClicks
+    , CAST(NULL AS INT) AS TotalClicks
+    , CAST(NULL AS INT) AS TotalUnsubscribes
+    , CAST(NULL AS INT) AS TotalComplaints
+FROM _Sent AS s
+WHERE s.EventDate >= DATEADD(DAY, -7, CAST(GETDATE() AS DATE))
+    AND s.EventDate < CAST(GETDATE() AS DATE)
+GROUP BY s.JobID
+```
+
+### Step 3: `Daily_Send_Metrics_Aggregation_3` — Update Bounces
+
+**Target Data Extension:** `Send_Engagement_Staging`
+
+**Action:** Update
+
+```sql
+SELECT
+    stg.JobID
+    , ISNULL(bounce_agg.TotalHardBounces, 0) AS TotalHardBounces
+    , ISNULL(bounce_agg.TotalSoftBounces, 0) AS TotalSoftBounces
+    , ISNULL(bounce_agg.TotalBounced, 0) AS TotalBounced
+FROM Send_Engagement_Staging AS stg
+    LEFT JOIN (
+        SELECT
+            b.JobID
+            , COUNT(DISTINCT CASE WHEN b.BounceCategory = 'Hard bounce' THEN b.SubscriberKey END) AS TotalHardBounces
+            , COUNT(DISTINCT CASE WHEN b.BounceCategory IN ('Soft bounce', 'Technical bounce') THEN b.SubscriberKey END) AS TotalSoftBounces
+            , COUNT(DISTINCT b.SubscriberKey) AS TotalBounced
+        FROM _Bounce AS b
+        WHERE b.IsUnique = 1
+            AND b.EventDate >= DATEADD(DAY, -7, CAST(GETDATE() AS DATE))
+            AND b.EventDate < CAST(GETDATE() AS DATE)
+            AND b.JobID IN (SELECT JobID FROM Send_Engagement_Staging)
+        GROUP BY b.JobID
+    ) AS bounce_agg
+        ON stg.JobID = bounce_agg.JobID
+```
+
+### Step 4: `Daily_Send_Metrics_Aggregation_4` — Update Opens
+
+**Target Data Extension:** `Send_Engagement_Staging`
+
+**Action:** Update
+
+```sql
+SELECT
+    stg.JobID
+    , ISNULL(open_agg.TotalUniqueOpens, 0) AS TotalUniqueOpens
+    , ISNULL(open_agg.TotalOpens, 0) AS TotalOpens
+FROM Send_Engagement_Staging AS stg
+    LEFT JOIN (
+        SELECT
+            o.JobID
+            , COUNT(DISTINCT CASE WHEN o.IsUnique = 1 THEN o.SubscriberKey END) AS TotalUniqueOpens
+            , COUNT(o.SubscriberKey) AS TotalOpens
+        FROM _Open AS o
+        WHERE o.EventDate >= DATEADD(DAY, -7, CAST(GETDATE() AS DATE))
+            AND o.EventDate < CAST(GETDATE() AS DATE)
+            AND o.JobID IN (SELECT JobID FROM Send_Engagement_Staging)
+        GROUP BY o.JobID
+    ) AS open_agg
+        ON stg.JobID = open_agg.JobID
+```
+
+### Step 5: `Daily_Send_Metrics_Aggregation_5` — Update Clicks
+
+**Target Data Extension:** `Send_Engagement_Staging`
+
+**Action:** Update
+
+```sql
+SELECT
+    stg.JobID
+    , ISNULL(click_agg.TotalUniqueClicks, 0) AS TotalUniqueClicks
+    , ISNULL(click_agg.TotalClicks, 0) AS TotalClicks
+FROM Send_Engagement_Staging AS stg
+    LEFT JOIN (
+        SELECT
+            c.JobID
+            , COUNT(DISTINCT CASE WHEN c.IsUnique = 1 THEN c.SubscriberKey END) AS TotalUniqueClicks
+            , COUNT(c.SubscriberKey) AS TotalClicks
+        FROM _Click AS c
+        WHERE c.EventDate >= DATEADD(DAY, -7, CAST(GETDATE() AS DATE))
+            AND c.EventDate < CAST(GETDATE() AS DATE)
+            AND c.JobID IN (SELECT JobID FROM Send_Engagement_Staging)
+        GROUP BY c.JobID
+    ) AS click_agg
+        ON stg.JobID = click_agg.JobID
+```
+
+### Step 6: `Daily_Send_Metrics_Aggregation_6` — Update Unsubscribes
+
+**Target Data Extension:** `Send_Engagement_Staging`
+
+**Action:** Update
+
+```sql
+SELECT
+    stg.JobID
+    , ISNULL(unsub_agg.TotalUnsubscribes, 0) AS TotalUnsubscribes
+FROM Send_Engagement_Staging AS stg
+    LEFT JOIN (
+        SELECT
+            u.JobID
+            , COUNT(DISTINCT u.SubscriberKey) AS TotalUnsubscribes
+        FROM _Unsubscribe AS u
+        WHERE u.EventDate >= DATEADD(DAY, -7, CAST(GETDATE() AS DATE))
+            AND u.EventDate < CAST(GETDATE() AS DATE)
+            AND u.JobID IN (SELECT JobID FROM Send_Engagement_Staging)
+        GROUP BY u.JobID
+    ) AS unsub_agg
+        ON stg.JobID = unsub_agg.JobID
+```
+
+### Step 7: `Daily_Send_Metrics_Aggregation_7` — Update Complaints
+
+**Target Data Extension:** `Send_Engagement_Staging`
+
+**Action:** Update
+
+```sql
+SELECT
+    stg.JobID
+    , ISNULL(comp_agg.TotalComplaints, 0) AS TotalComplaints
+FROM Send_Engagement_Staging AS stg
+    LEFT JOIN (
+        SELECT
+            comp.JobID
+            , COUNT(DISTINCT comp.SubscriberKey) AS TotalComplaints
+        FROM _Complaint AS comp
+        WHERE comp.EventDate >= DATEADD(DAY, -7, CAST(GETDATE() AS DATE))
+            AND comp.EventDate < CAST(GETDATE() AS DATE)
+            AND comp.JobID IN (SELECT JobID FROM Send_Engagement_Staging)
+        GROUP BY comp.JobID
+    ) AS comp_agg
+        ON stg.JobID = comp_agg.JobID
+```
+
+### Step 8: `Daily_Send_Metrics_Aggregation_8` — Merge Into Send_Fact
+
+**Target Data Extension:** `Send_Fact`
+
+**Action:** Update
+
+```sql
+SELECT
+    meta.JobID
+    , NULL AS CampaignID
+    , meta.SentDateTime
+    , meta.CampaignName
+    , meta.SubjectLine
+    , meta.Preheader
+    , meta.JourneyID
+    , meta.JourneyName
+    , meta.Market
+    , meta.UserCulture
+    , NULL AS Segment
+    , eng.TotalSent
+    , eng.TotalSent - ISNULL(eng.TotalBounced, 0) AS TotalDelivered
+    , ISNULL(eng.TotalHardBounces, 0) AS TotalHardBounces
+    , ISNULL(eng.TotalSoftBounces, 0) AS TotalSoftBounces
+    , ISNULL(eng.TotalBounced, 0) AS TotalBounced
+    , ISNULL(eng.TotalComplaints, 0) AS TotalComplaints
+    , ISNULL(eng.TotalUniqueOpens, 0) AS TotalUniqueOpens
+    , ISNULL(eng.TotalOpens, 0) AS TotalOpens
+    , ISNULL(eng.TotalUniqueClicks, 0) AS TotalUniqueClicks
+    , ISNULL(eng.TotalClicks, 0) AS TotalClicks
+    , ISNULL(eng.TotalUnsubscribes, 0) AS TotalUnsubscribes
+    , CAST(1.0 * (eng.TotalSent - ISNULL(eng.TotalBounced, 0)) / NULLIF(eng.TotalSent, 0) AS DECIMAL(6, 4)) AS DeliveryRate
+    , CAST(1.0 * ISNULL(eng.TotalBounced, 0) / NULLIF(eng.TotalSent, 0) AS DECIMAL(6, 4)) AS BounceRate
+    , CAST(1.0 * ISNULL(eng.TotalComplaints, 0) / NULLIF(eng.TotalSent - ISNULL(eng.TotalBounced, 0), 0) AS DECIMAL(6, 4)) AS ComplaintRate
+    , CAST(1.0 * ISNULL(eng.TotalUniqueOpens, 0) / NULLIF(eng.TotalSent - ISNULL(eng.TotalBounced, 0), 0) AS DECIMAL(6, 4)) AS OpenRate
+    , CAST(1.0 * ISNULL(eng.TotalUniqueClicks, 0) / NULLIF(eng.TotalSent - ISNULL(eng.TotalBounced, 0), 0) AS DECIMAL(6, 4)) AS CTR
+    , CAST(1.0 * ISNULL(eng.TotalUniqueClicks, 0) / NULLIF(ISNULL(eng.TotalUniqueOpens, 0), 0) AS DECIMAL(6, 4)) AS CTOR
+    , CAST(1.0 * ISNULL(eng.TotalUnsubscribes, 0) / NULLIF(eng.TotalSent - ISNULL(eng.TotalBounced, 0), 0) AS DECIMAL(6, 4)) AS UnsubscribeRate
+    , CAST(GETDATE() AS DATE) AS InsertedDate
+    , CAST(GETDATE() AS DATE) AS ModifiedDate
+FROM Send_JobID_Staging AS meta
+    INNER JOIN Send_Engagement_Staging AS eng
+        ON meta.JobID = eng.JobID
+```
+
+**Key Features:**
+- Joins metadata (`Send_JobID_Staging`) with engagement totals (`Send_Engagement_Staging`) on JobID
+- Calculates derived rates (Delivery, Bounce, Complaint, Open, CTR, CTOR, Unsubscribe) as `DECIMAL(6,4)` (0.0000–1.0000)
+- Update action upserts by `JobID` so existing rows are refreshed with the latest 7-day engagement counts
+- `CampaignID` and `Segment` reserved (NULL) for future use
+
+### Execution Order Notes
+
+Steps 1 and 2 are independent of each other but Steps 3–7 all depend on Step 2 (they update `Send_Engagement_Staging`). Step 8 depends on both staging tables being fully populated. The current automation runs all 8 steps sequentially.
+
+---
+
+*Last Updated: 22 May 2026*

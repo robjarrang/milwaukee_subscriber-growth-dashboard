@@ -1,0 +1,3211 @@
+<!DOCTYPE html>
+<html lang="en-GB">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RYOBI - Subscriber Analytics Dashboard</title>
+    
+    <!-- Resource Hints for Performance -->
+    <link rel="dns-prefetch" href="//cdn.jsdelivr.net">
+    <link rel="dns-prefetch" href="//cdnjs.cloudflare.com">
+    <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
+    <link rel="preconnect" href="https://cdnjs.cloudflare.com" crossorigin>
+    
+    %%[
+    /* ===== MARKETING CLOUD USER AUTHENTICATION ===== */
+    
+    /* IMPORTANT: Update these variables with your Installed Package details */
+    SET @cloudpageURL = '' /* Full URL of this CloudPage - TO BE CONFIGURED */
+    SET @baseURI = '' /* Your MC instance base URI - TO BE CONFIGURED */
+    SET @clientid = '' /* Client ID from your Installed Package - TO BE CONFIGURED */
+    SET @clientsecret = '' /* Client Secret from your Installed Package - TO BE CONFIGURED */
+    
+    /* Encryption settings for session key - change these for security */
+    SET @ivector = '0123456789ABCDEF0123456789ABCDEF' /* 32 hex characters */
+    SET @salt = '0123456789ABCDEF' /* 16 hex characters */
+    SET @encrpswd = '0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF' /* 64 hex characters */
+    
+    /* Get authorization code from URL if present */
+    SET @code = RequestParameter('code')
+    
+    /* Check if session key is passed and decrypt it */
+    SET @passedencrsessionkey = RequestParameter('sessionkey')
+    SET @username = ""
+    SET @userAuthenticated = false
+    
+    IF NOT Empty(@passedencrsessionkey) THEN
+        SET @passedsessionkey = DecryptSymmetric(@passedencrsessionkey, 'AES', @null, @encrpswd, @null, @salt, @null, @ivector)
+    ENDIF
+    
+    /* Create new encrypted session key with 1 hour lifetime */
+    SET @newsessionkey = DateAdd(Now(), 1, "H")
+    SET @sessionkey = EncryptSymmetric(@newsessionkey, 'AES', @null, @encrpswd, @null, @salt, @null, @ivector)
+    
+    /* Check if passed session key is valid */
+    IF NOT Empty(@passedencrsessionkey) AND NOT Empty(@passedsessionkey) AND @passedsessionkey >= Now() AND @passedsessionkey <= @newsessionkey THEN
+        SET @userAuthenticated = true
+        SET @username = RequestParameter('u')
+        
+    ELSEIF NOT Empty(@code) THEN
+    ]%%
+    
+    <script runat="server">
+        Platform.Load("Core", "1.1.1");
+        
+        try {
+            var code = Platform.Variable.GetValue("@code");
+            var clientId = Variable.GetValue("@clientid");
+            var clientSecret = Variable.GetValue("@clientsecret");
+            var cloudpageURL = Variable.GetValue("@cloudpageURL");
+            var baseURI = Variable.GetValue("@baseURI");
+            
+            var payload = {
+                "grant_type": "authorization_code",
+                "code": code,
+                "client_id": clientId,
+                "client_secret": clientSecret,
+                "redirect_uri": cloudpageURL
+            };
+            
+            var OAuth2URL = 'https://' + baseURI + '.auth.marketingcloudapis.com/v2/token';
+            var contentType = 'application/json';
+            var checkCode = HTTP.Post(OAuth2URL, contentType, Stringify(payload));
+            
+            var tokenObj = Platform.Function.ParseJSON(checkCode["Response"][0]);
+            var accessToken = tokenObj.access_token;
+            
+            var headerNames = ["Authorization"];
+            var headerValues = ["Bearer " + accessToken];
+            var userInfoURL = 'https://' + baseURI + '.auth.marketingcloudapis.com/v2/userinfo';
+            var userinfo = HTTP.Get(userInfoURL, headerNames, headerValues);
+            var userinfojson = Platform.Function.ParseJSON(userinfo["Content"]);
+            
+            Variable.SetValue("@username", userinfojson.user.preferred_username || userinfojson.user.email || "User");
+            Variable.SetValue("@userAuthenticated", true);
+            
+        } catch(e) {
+    </script>
+    
+    %%[
+            SET @authURL = Concat('https://', @baseURI, '.auth.marketingcloudapis.com/v2/authorize?response_type=code&client_id=', @clientid, '&redirect_uri=', @cloudpageURL)
+            Redirect(@authURL)
+    ]%%
+    
+    <script runat="server">
+        }
+    </script>
+    
+    %%[
+    ELSE
+        SET @authURL = Concat('https://', @baseURI, '.auth.marketingcloudapis.com/v2/authorize?response_type=code&client_id=', @clientid, '&redirect_uri=', @cloudpageURL)
+        Output('<script>if(window.top!==window){window.top.location.href="')
+        Output(v(@authURL))
+        Output('";}</script>')
+    ]%%
+    %%[
+        Redirect(@authURL)
+    ENDIF
+    
+    /* ===== DATA RETRIEVAL (only if authenticated) ===== */
+    ]%%
+    
+<script runat="server">
+    Platform.Load("core", "1.1.1");
+    
+    // Initialize variables for data storage
+    var subscriberCountJSON = "[]";
+    var preferenceCountJSON = "[]";
+    var monthlyMetricsJSON = "[]";
+    var campaignMetricsJSON = "[]";
+    var myRyobiAccountJSON = "[]";
+    var ga4DataJSON = "[]";
+    var debugInfo = "";
+    var errorMessage = "";
+    var username = Variable.GetValue("@username") || "User";
+    var sessionkey = Variable.GetValue("@sessionkey") || "";
+    
+    // Get tab parameter to determine which data to load
+    var activeTab = Platform.Request.GetQueryStringParameter("tab") || "overview";
+    
+    // Only retrieve data if user is authenticated
+    if (Variable.GetValue("@userAuthenticated") == true) {
+        try {
+            var startTime = new Date().getTime();
+            debugInfo += "Loading data for tab: " + activeTab + ". ";
+            
+            // CONDITIONAL DATA LOADING BASED ON ACTIVE TAB
+            if (activeTab == "overview") {
+                // Overview tab needs: Subscriber counts + Preference counts
+                var subscriberCountRecords = retrieveSubscriberCountDaily();
+                debugInfo += "SubscriberCount_Log_Daily: " + subscriberCountRecords.length + " records. ";
+                subscriberCountJSON = subscriberCountRecords.length > 0 ? Stringify(subscriberCountRecords) : "[]";
+                
+                var preferenceCountRecords = retrievePreferenceCountDaily();
+                debugInfo += "PreferenceCount_Log_Daily: " + preferenceCountRecords.length + " records. ";
+                preferenceCountJSON = preferenceCountRecords.length > 0 ? Stringify(preferenceCountRecords) : "[]";
+                
+            } else if (activeTab == "email") {
+                // Email Analytics tab needs: Monthly Metrics (overall, not regional)
+                var monthlyMetricsRecords = retrieveMonthlyMetricsFinal();
+                debugInfo += "Monthly_Metrics_Final_DE: " + monthlyMetricsRecords.length + " records. ";
+                monthlyMetricsJSON = monthlyMetricsRecords.length > 0 ? Stringify(monthlyMetricsRecords) : "[]";
+                
+            } else if (activeTab == "campaigns") {
+                // Campaigns tab needs: Campaign Metrics
+                var campaignMetricsRecords = retrieveCampaignMetrics();
+                debugInfo += "Campaign_Metrics_DE: " + campaignMetricsRecords.length + " records. ";
+                campaignMetricsJSON = campaignMetricsRecords.length > 0 ? Stringify(campaignMetricsRecords) : "[]";
+                
+            } else if (activeTab == "growth") {
+                // Growth tab needs: Subscriber counts + Preference counts
+                var subscriberCountRecords = retrieveSubscriberCountDaily();
+                debugInfo += "SubscriberCount_Log_Daily: " + subscriberCountRecords.length + " records. ";
+                subscriberCountJSON = subscriberCountRecords.length > 0 ? Stringify(subscriberCountRecords) : "[]";
+                
+                var preferenceCountRecords = retrievePreferenceCountDaily();
+                debugInfo += "PreferenceCount_Log_Daily: " + preferenceCountRecords.length + " records. ";
+                preferenceCountJSON = preferenceCountRecords.length > 0 ? Stringify(preferenceCountRecords) : "[]";
+                
+            } else if (activeTab == "signups") {
+                // Signups tab: SKELETON - Data source TBC
+                debugInfo += "Signups: Skeleton tab - data source to be confirmed. ";
+                
+            } else if (activeTab == "myryobi") {
+                // MyRyobi tab: SKELETON - Data source TBC
+                debugInfo += "MyRyobi: Skeleton tab - data source to be confirmed. ";
+                
+            } else if (activeTab == "ga4") {
+                // GA4 tab: SKELETON - Data pipeline TBC
+                debugInfo += "GA4: Skeleton tab - data pipeline to be configured. ";
+            }
+
+            var endTime = new Date().getTime();
+            var loadTime = ((endTime - startTime) / 1000).toFixed(2);
+            debugInfo += "Load time: " + loadTime + "s.";
+            
+        } catch (err) {
+            errorMessage = "Error: " + Stringify(err);
+            debugInfo += " ERROR occurred during data retrieval.";
+        }
+    }
+    
+    // ====================================================================================
+    // == DATA RETRIEVAL FUNCTIONS ====================================================== ==
+    // ====================================================================================
+
+    function formatDateValue(value) {
+        try {
+            if (!value) return "";
+            return Platform.Function.FormatDate(value, "iso");
+        } catch (e) {
+            return value || "";
+        }
+    }
+
+    function safeInteger(value) {
+        var parsed = parseInt(value, 10);
+        return isNaN(parsed) ? 0 : parsed;
+    }
+
+    function safeDecimal(value) {
+        var parsed = parseFloat(value);
+        return isNaN(parsed) ? 0 : parsed;
+    }
+
+    // ==================================================================================
+    // Retrieve SubscriberCount_Log_Daily
+    // DE Schema: LogDate (Date, PK), CountryCode (Text 2, PK), SubscriberCount (Number)
+    // ==================================================================================
+    function retrieveSubscriberCountDaily() {
+        var allRecords = [];
+        try {
+            var prox = new Script.Util.WSProxy();
+            var cols = ["LogDate", "CountryCode", "SubscriberCount"];
+            var moreData = true;
+            var reqID = null;
+            var batchCount = 0;
+            var maxBatches = 3;
+            var opts = { BatchSize: 2500 };
+            var props = {};
+            
+            while (moreData && batchCount < maxBatches) {
+                moreData = false;
+                if (reqID) { props.ContinueRequest = reqID; }
+                var data = prox.retrieve("DataExtensionObject[SubscriberCount_Log_Daily]", cols, null, opts, props);
+                
+                if (data && data.Results) {
+                    moreData = data.HasMoreRows;
+                    reqID = data.RequestID;
+                    batchCount++;
+                    
+                    for (var j = 0; j < data.Results.length; j++) {
+                        var result = data.Results[j];
+                        var obj = {
+                            logDate: "",
+                            countryCode: "",
+                            subscriberCount: 0
+                        };
+                        for (var k = 0; k < result.Properties.length; k++) {
+                            var prop = result.Properties[k];
+                            if (prop.Name === "LogDate") obj.logDate = formatDateValue(prop.Value);
+                            else if (prop.Name === "CountryCode") obj.countryCode = (prop.Value || "").toUpperCase();
+                            else if (prop.Name === "SubscriberCount") obj.subscriberCount = safeInteger(prop.Value);
+                        }
+                        allRecords.push(obj);
+                    }
+                }
+            }
+        } catch (e) {
+            debugInfo += "Error in retrieveSubscriberCountDaily: " + Stringify(e) + ". ";
+        }
+        return allRecords;
+    }
+
+    // ==================================================================================
+    // Retrieve PreferenceCount_Log_Daily
+    // DE Schema: LogDate (Date, PK), CountryCode (Text 2, PK), PreferenceType (Text 100, PK),
+    //            PreferenceCount (Number), TotalSubscribers (Number), PreferencePercentage (Decimal 6,2)
+    // ==================================================================================
+    function retrievePreferenceCountDaily() {
+        var allRecords = [];
+        try {
+            var prox = new Script.Util.WSProxy();
+            var cols = ["LogDate", "CountryCode", "PreferenceType", "PreferenceCount", "TotalSubscribers", "PreferencePercentage"];
+            var moreData = true;
+            var reqID = null;
+            var batchCount = 0;
+            var maxBatches = 20; // Higher limit - 19 countries x 11 preferences = 209 rows/day
+            var opts = { BatchSize: 2500 };
+            var props = {};
+            
+            while (moreData && batchCount < maxBatches) {
+                moreData = false;
+                if (reqID) { props.ContinueRequest = reqID; }
+                var data = prox.retrieve("DataExtensionObject[PreferenceCount_Log_Daily]", cols, null, opts, props);
+                
+                if (data && data.Results) {
+                    moreData = data.HasMoreRows;
+                    reqID = data.RequestID;
+                    batchCount++;
+                    
+                    for (var j = 0; j < data.Results.length; j++) {
+                        var result = data.Results[j];
+                        var obj = {
+                            logDate: "",
+                            countryCode: "",
+                            preferenceType: "",
+                            preferenceCount: 0,
+                            totalSubscribers: 0,
+                            preferencePercentage: 0
+                        };
+                        for (var k = 0; k < result.Properties.length; k++) {
+                            var prop = result.Properties[k];
+                            switch (prop.Name) {
+                                case "LogDate": obj.logDate = formatDateValue(prop.Value); break;
+                                case "CountryCode": obj.countryCode = (prop.Value || "").toUpperCase(); break;
+                                case "PreferenceType": obj.preferenceType = prop.Value || ""; break;
+                                case "PreferenceCount": obj.preferenceCount = safeInteger(prop.Value); break;
+                                case "TotalSubscribers": obj.totalSubscribers = safeInteger(prop.Value); break;
+                                case "PreferencePercentage": obj.preferencePercentage = safeDecimal(prop.Value); break;
+                            }
+                        }
+                        allRecords.push(obj);
+                    }
+                }
+            }
+        } catch (e) {
+            debugInfo += "Error in retrievePreferenceCountDaily: " + Stringify(e) + ". ";
+        }
+        return allRecords;
+    }
+
+    // ==================================================================================
+    // Retrieve Monthly_Metrics_Final_DE
+    // DE Schema: YearNumber (Number, PK), MonthNumber (Number, PK),
+    //            TotalSent, TotalBouncedUnique, TotalDelivered, TotalOpenUnique, TotalClickUnique,
+    //            TotalUnsubscribedUnique, TotalOpens, TotalClicks,
+    //            DeliveryRatePct, BounceRatePct, OpenRatePct, ClickThroughRatePct,
+    //            ClickToOpenRatePct, UnsubscribeRatePct
+    // ==================================================================================
+    function retrieveMonthlyMetricsFinal() {
+        var allRecords = [];
+        try {
+            // Small DE (6 rows) - LookupRows is fine
+            var rows = Platform.Function.LookupRows("Monthly_Metrics_Final_DE", "", "");
+            if (rows && rows.length > 0) {
+                for (var i = 0; i < rows.length; i++) {
+                    var row = rows[i];
+                    var obj = {
+                        year: parseInt(row.YearNumber) || 0,
+                        month: parseInt(row.MonthNumber) || 0,
+                        totalSent: safeInteger(row.TotalSent),
+                        totalBouncedUnique: safeInteger(row.TotalBouncedUnique),
+                        totalDelivered: safeInteger(row.TotalDelivered),
+                        totalOpenUnique: safeInteger(row.TotalOpenUnique),
+                        totalClickUnique: safeInteger(row.TotalClickUnique),
+                        totalUnsubscribedUnique: safeInteger(row.TotalUnsubscribedUnique),
+                        totalOpens: safeInteger(row.TotalOpens),
+                        totalClicks: safeInteger(row.TotalClicks),
+                        deliveryRatePct: safeDecimal(row.DeliveryRatePct),
+                        bounceRatePct: safeDecimal(row.BounceRatePct),
+                        openRatePct: safeDecimal(row.OpenRatePct),
+                        clickThroughRatePct: safeDecimal(row.ClickThroughRatePct),
+                        clickToOpenRatePct: safeDecimal(row.ClickToOpenRatePct),
+                        unsubscribeRatePct: safeDecimal(row.UnsubscribeRatePct)
+                    };
+                    allRecords.push(obj);
+                }
+            }
+        } catch (e) {
+            debugInfo += "Error in retrieveMonthlyMetricsFinal: " + Stringify(e) + ". ";
+        }
+        return allRecords;
+    }
+
+    // ==================================================================================
+    // Retrieve Campaign_Metrics_DE
+    // DE Schema: JobID (Number, PK), EmailName (Text 200), EmailSubject (Text 200),
+    //            SendDate (Date), TotalSent, TotalBounced, TotalDelivered, TotalOpened,
+    //            TotalClicked, TotalUnsubscribed, DeliveryRate, BounceRate, OpenRate,
+    //            ClickRate, ClickToOpenRate, UnsubscribeRate, JourneyName (Text 200)
+    // ==================================================================================
+    function retrieveCampaignMetrics() {
+        var allRecords = [];
+        try {
+            var prox = new Script.Util.WSProxy();
+            var cols = ["JobID", "EmailName", "EmailSubject", "SendDate", "TotalSent", "TotalBounced", "TotalDelivered", "TotalOpened", "TotalClicked", "TotalUnsubscribed", "DeliveryRate", "BounceRate", "OpenRate", "ClickRate", "ClickToOpenRate", "UnsubscribeRate", "JourneyName"];
+            var moreData = true;
+            var reqID = null;
+            var batchCount = 0;
+            var maxBatches = 4;
+            var opts = { BatchSize: 2500 };
+            var props = {};
+            
+            while (moreData && batchCount < maxBatches) {
+                moreData = false;
+                if (reqID) { props.ContinueRequest = reqID; }
+                var data = prox.retrieve("DataExtensionObject[Campaign_Metrics_DE]", cols, null, opts, props);
+                
+                if (data && data.Results) {
+                    moreData = data.HasMoreRows;
+                    reqID = data.RequestID;
+                    batchCount++;
+                    
+                    for (var j = 0; j < data.Results.length; j++) {
+                        var result = data.Results[j];
+                        var obj = {
+                            jobId: 0,
+                            emailName: "",
+                            emailSubject: "",
+                            sendDate: "",
+                            totalSent: 0,
+                            totalBounced: 0,
+                            totalDelivered: 0,
+                            totalOpened: 0,
+                            totalClicked: 0,
+                            totalUnsubscribed: 0,
+                            deliveryRate: 0,
+                            bounceRate: 0,
+                            openRate: 0,
+                            clickRate: 0,
+                            clickToOpenRate: 0,
+                            unsubscribeRate: 0,
+                            journeyName: ""
+                        };
+                        for (var k = 0; k < result.Properties.length; k++) {
+                            var prop = result.Properties[k];
+                            switch (prop.Name) {
+                                case "JobID": obj.jobId = safeInteger(prop.Value); break;
+                                case "EmailName": obj.emailName = prop.Value || ""; break;
+                                case "EmailSubject": obj.emailSubject = prop.Value || ""; break;
+                                case "SendDate": obj.sendDate = formatDateValue(prop.Value); break;
+                                case "TotalSent": obj.totalSent = safeInteger(prop.Value); break;
+                                case "TotalBounced": obj.totalBounced = safeInteger(prop.Value); break;
+                                case "TotalDelivered": obj.totalDelivered = safeInteger(prop.Value); break;
+                                case "TotalOpened": obj.totalOpened = safeInteger(prop.Value); break;
+                                case "TotalClicked": obj.totalClicked = safeInteger(prop.Value); break;
+                                case "TotalUnsubscribed": obj.totalUnsubscribed = safeInteger(prop.Value); break;
+                                case "DeliveryRate": obj.deliveryRate = safeDecimal(prop.Value); break;
+                                case "BounceRate": obj.bounceRate = safeDecimal(prop.Value); break;
+                                case "OpenRate": obj.openRate = safeDecimal(prop.Value); break;
+                                case "ClickRate": obj.clickRate = safeDecimal(prop.Value); break;
+                                case "ClickToOpenRate": obj.clickToOpenRate = safeDecimal(prop.Value); break;
+                                case "UnsubscribeRate": obj.unsubscribeRate = safeDecimal(prop.Value); break;
+                                case "JourneyName": obj.journeyName = prop.Value || ""; break;
+                            }
+                        }
+                        allRecords.push(obj);
+                    }
+                }
+            }
+        } catch (e) {
+            debugInfo += "Error in retrieveCampaignMetrics: " + Stringify(e) + ". ";
+        }
+        return allRecords;
+    }
+
+    // ==================================================================================
+    // SKELETON: Retrieve MyRyobi Account Data
+    // TODO: Data Extension schema and name to be confirmed
+    // ==================================================================================
+    function retrieveMyRyobiAccountData() {
+        var allRecords = [];
+        // SKELETON: Implement when MyRyobi Account DE is available
+        debugInfo += "MyRyobi Account: Awaiting DE configuration. ";
+        return allRecords;
+    }
+
+    // ==================================================================================
+    // SKELETON: Retrieve GA4 Data
+    // TODO: GA4 data pipeline to be designed and implemented
+    // Options: GA4 API -> Cloud Function -> SFMC DE, or manual import
+    // ==================================================================================
+    function retrieveGA4Data() {
+        var allRecords = [];
+        // SKELETON: Implement when GA4 data pipeline is configured
+        debugInfo += "GA4 Data: Awaiting pipeline configuration. ";
+        return allRecords;
+    }
+
+    // Output data as JavaScript variables for the client-side UI to consume.
+    Write('<script type="text/javascript">\n');
+    Write('var subscriberCountData = ' + subscriberCountJSON + ';\n');
+    Write('var preferenceCountData = ' + preferenceCountJSON + ';\n');
+    Write('var monthlyMetricsData = ' + monthlyMetricsJSON + ';\n');
+    Write('var campaignMetricsData = ' + campaignMetricsJSON + ';\n');
+    Write('var myRyobiAccountData = ' + myRyobiAccountJSON + ';\n');
+    Write('var ga4Data = ' + ga4DataJSON + ';\n');
+    Write('var debugInfo = "' + debugInfo.replace(/"/g, '\\"') + '";\n');
+    Write('var errorMsg = "' + errorMessage.replace(/"/g, '\\"') + '";\n');
+    Write('var currentUser = "' + username.replace(/"/g, '\\"') + '";\n');
+    Write('var sessionKey = "' + sessionkey.replace(/"/g, '\\"') + '";\n');
+    Write('var activeTabLoaded = "' + activeTab.replace(/"/g, '\\"') + '";\n');
+    Write('</script>\n');
+</script>
+    
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.5.0/font/bootstrap-icons.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/3.9.1/chart.min.js" defer></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        :root {
+            --ryobi-green: #78BE20;
+            --ryobi-dark-green: #5a9a10;
+            --ryobi-black: #1a1a1a;
+            --ryobi-dark-grey: #333333;
+            --ryobi-grey: #f8f8f8;
+            --ryobi-light-grey: #f2f2f2;
+            --ryobi-silver: #555555;
+            --ryobi-white: #ffffff;
+            --text: #333333;
+            --text-muted: #444444;
+            --accent: #78BE20;
+            --warning: #ffa500;
+            --error: #ff3333;
+            --success: #00cc44;
+            --border: #d1d1d1;
+            --shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+        }
+
+        button, .btn, input, select {
+            border-radius: 0 !important;
+        }
+
+        body {
+            font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
+            background-color: var(--ryobi-light-grey);
+            color: var(--text);
+            min-height: 100vh;
+            line-height: 1.6;
+            position: relative;
+        }
+
+        /* Navigation bar - RYOBI Green */
+        .navbar {
+            background-color: var(--ryobi-black);
+            padding: 0.8rem 1rem;
+            box-shadow: 0 2px 8px rgba(0,0,0,.15);
+            position: sticky;
+            top: 0;
+            z-index: 1000;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        .navbar-brand {
+            color: #ffffff !important;
+            font-weight: 700;
+            text-decoration: none;
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+        }
+        
+        .navbar-brand:hover {
+            color: #ffffff !important;
+            text-decoration: none;
+        }
+
+        .navbar-brand strong {
+            color: var(--ryobi-green);
+        }
+
+        .info-box {
+            background: var(--ryobi-white);
+            border-left: 4px solid var(--ryobi-green);
+            color: var(--text);
+            padding: 1rem;
+            margin-bottom: 2rem;
+            font-family: monospace;
+            font-size: 0.875rem;
+            transition: all 0.3s ease;
+            position: relative;
+            overflow: hidden;
+            box-shadow: var(--shadow);
+        }
+
+        .info-box::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 4px;
+            height: 100%;
+            background: var(--ryobi-green);
+        }
+
+        .info-box.error {
+            background: rgba(255, 0, 0, 0.1);
+            border-left-color: var(--error);
+        }
+
+        .info-box.error::before {
+            background: var(--error);
+        }
+
+        /* ===== DASHBOARD TABS ===== */
+        .dashboard-tabs-container {
+            margin-bottom: 0;
+        }
+
+        .dashboard-tabs {
+            display: flex;
+            gap: 0;
+            background: var(--ryobi-white);
+            border-bottom: 3px solid var(--ryobi-green);
+            position: sticky;
+            top: 56px;
+            z-index: 100;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            overflow-x: auto;
+        }
+
+        .tab-btn {
+            padding: 1rem 1.5rem;
+            background: transparent;
+            color: var(--text);
+            border: none;
+            border-bottom: 3px solid transparent;
+            cursor: pointer;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            font-size: 0.85rem;
+            white-space: nowrap;
+            transition: all 0.3s ease;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            margin-bottom: -3px;
+        }
+
+        .tab-btn:hover {
+            color: var(--ryobi-green);
+            background: rgba(120, 190, 32, 0.05);
+        }
+
+        .tab-btn.active {
+            color: var(--ryobi-green);
+            border-bottom-color: var(--ryobi-green);
+            background: rgba(120, 190, 32, 0.08);
+        }
+
+        .tab-pane {
+            display: none;
+            padding: 2rem 0;
+        }
+
+        .tab-pane.active {
+            display: block;
+        }
+
+        /* ===== GLOBAL FILTERS ===== */
+        .global-filters {
+            display: flex;
+            gap: 1rem;
+            padding: 1rem;
+            background: var(--ryobi-white);
+            border: 1px solid var(--border);
+            border-bottom: none;
+            align-items: flex-end;
+            flex-wrap: wrap;
+        }
+
+        .global-filter-group {
+            display: flex;
+            flex-direction: column;
+            flex: 1;
+            min-width: 150px;
+        }
+
+        .global-filter-group label {
+            color: var(--ryobi-green);
+            font-size: 0.75rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 0.25rem;
+        }
+
+        /* ===== MOBILE TAB DROPDOWN ===== */
+        .mobile-tab-dropdown {
+            display: none;
+            padding: 0.5rem 0;
+        }
+
+        .mobile-tab-dropdown select {
+            width: 100%;
+            padding: 0.75rem 1rem;
+            font-size: 1rem;
+            font-weight: 600;
+            border: 2px solid var(--ryobi-green);
+            background: var(--ryobi-white);
+            color: var(--text);
+        }
+
+        @media (max-width: 768px) {
+            .dashboard-tabs {
+                display: none !important;
+            }
+            .mobile-tab-dropdown {
+                display: block;
+            }
+        }
+
+        /* ===== EMAIL ANALYTICS SECTION ===== */
+        .email-analytics-section {
+            background: var(--ryobi-white);
+            padding: 1.5rem;
+            margin-bottom: 2rem;
+            box-shadow: var(--shadow);
+            border: 1px solid var(--border);
+            border-top: 3px solid var(--ryobi-green);
+            animation: fadeInUp 0.8s ease 0.1s both;
+            position: relative;
+        }
+
+        .email-analytics-section::before {
+            content: 'EMAIL PERFORMANCE';
+            position: absolute;
+            top: -12px;
+            left: 20px;
+            background: var(--ryobi-green);
+            color: white;
+            padding: 0 10px;
+            font-size: 0.75rem;
+            font-weight: 900;
+            letter-spacing: 1px;
+        }
+
+        .email-period-selector {
+            display: flex;
+            gap: 0.5rem;
+            margin-bottom: 1.5rem;
+            flex-wrap: wrap;
+        }
+
+        .period-btn {
+            padding: 0.5rem 1rem;
+            background: var(--ryobi-grey);
+            color: var(--text);
+            border: 1px solid var(--border);
+            cursor: pointer;
+            transition: all 0.3s ease;
+            font-size: 0.875rem;
+            font-weight: 600;
+        }
+
+        .period-btn:hover {
+            background: var(--ryobi-green);
+            color: white;
+            transform: translateY(-1px);
+            box-shadow: 0 3px 8px rgba(120, 190, 32, 0.3);
+        }
+
+        .period-btn.active {
+            background: var(--ryobi-green);
+            color: white;
+            font-weight: 700;
+            box-shadow: 0 2px 5px rgba(120, 190, 32, 0.4);
+        }
+
+        .email-stats-grid {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 1rem;
+            margin-bottom: 1.5rem;
+        }
+
+        .email-stat-card {
+            background: var(--ryobi-grey);
+            padding: 1rem;
+            border: 1px solid var(--border);
+            border-left: 4px solid var(--ryobi-green);
+            position: relative;
+            transition: all 0.3s ease;
+        }
+
+        .email-stat-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(120, 190, 32, 0.2);
+        }
+
+        .email-stat-value {
+            font-size: 1.5rem;
+            font-weight: 900;
+            color: var(--ryobi-green);
+            margin-bottom: 0.25rem;
+        }
+
+        .email-stat-label {
+            color: var(--ryobi-silver);
+            font-size: 0.75rem;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            font-weight: 700;
+        }
+
+        .stat-comparison {
+            font-size: 0.85rem;
+            font-weight: 700;
+            margin-top: 0.5rem;
+            display: flex;
+            align-items: center;
+            gap: 0.25rem;
+        }
+
+        .stat-comparison.positive { color: #00cc44; }
+        .stat-comparison.negative { color: #ff3333; }
+        .stat-comparison.neutral { color: var(--ryobi-silver); }
+
+        .email-chart-container {
+            position: relative;
+            height: 300px;
+            width: 100%;
+            background: var(--ryobi-white);
+            padding: 1rem;
+            border: 1px solid var(--border);
+            margin-top: 1rem;
+        }
+
+        .email-table-container {
+            overflow-x: auto;
+            background: var(--ryobi-white);
+            border: 1px solid var(--border);
+            margin-top: 1rem;
+        }
+
+        .email-table {
+            width: 100%;
+            border-collapse: separate;
+            border-spacing: 0;
+        }
+
+        .email-table thead th {
+            background: var(--ryobi-grey);
+            color: var(--ryobi-green);
+            padding: 0.75rem;
+            text-align: left;
+            font-weight: 900;
+            text-transform: uppercase;
+            font-size: 0.75rem;
+            letter-spacing: 1px;
+            border-bottom: 2px solid var(--ryobi-green);
+        }
+
+        .email-table tbody td {
+            padding: 0.75rem;
+            border-bottom: 1px solid var(--border);
+            color: var(--text);
+            font-size: 0.875rem;
+        }
+
+        .email-table tbody tr:hover {
+            background: rgba(120, 190, 32, 0.05);
+        }
+
+        /* ===== STAT CARDS ===== */
+        .stats-cards {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+            gap: 1.5rem;
+            margin-bottom: 2rem;
+        }
+
+        .stat-card {
+            background: var(--ryobi-white);
+            padding: 1.5rem;
+            border: 1px solid var(--border);
+            border-left: 4px solid var(--ryobi-green);
+            position: relative;
+            overflow: hidden;
+            animation: fadeInUp 0.8s ease 0.4s both;
+            transition: all 0.3s ease;
+        }
+
+        .stat-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 10px 30px rgba(120, 190, 32, 0.2);
+            background: var(--ryobi-grey);
+        }
+
+        .stat-value {
+            font-size: 2.5rem;
+            font-weight: 900;
+            color: var(--ryobi-green);
+            margin-bottom: 0.5rem;
+        }
+
+        .stat-label {
+            color: var(--text-muted);
+            font-size: 0.875rem;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            font-weight: 700;
+        }
+
+        /* ===== DATA SECTIONS ===== */
+        .data-section {
+            background: var(--ryobi-white);
+            padding: 1.5rem;
+            margin-bottom: 2rem;
+            box-shadow: var(--shadow);
+            border: 1px solid var(--border);
+            border-top: 3px solid var(--ryobi-green);
+            animation: fadeInUp 0.8s ease 0.6s both;
+        }
+
+        .chart-section {
+            background: var(--ryobi-grey);
+            padding: 1.5rem;
+            margin-bottom: 2rem;
+            box-shadow: var(--shadow);
+            border: 1px solid var(--border);
+            border-top: 3px solid var(--ryobi-green);
+            animation: fadeInUp 0.8s ease 0.5s both;
+            min-height: 400px;
+        }
+
+        .chart-container {
+            position: relative;
+            height: 400px;
+            width: 100%;
+            background: var(--ryobi-white);
+            padding: 1rem;
+            border: 1px solid var(--border);
+        }
+
+        .chart-controls {
+            display: flex;
+            gap: 1rem;
+            margin-bottom: 1rem;
+            flex-wrap: wrap;
+        }
+
+        .chart-toggle {
+            background: var(--ryobi-white);
+            border: 2px solid var(--border);
+            color: var(--text);
+            padding: 0.5rem 1rem;
+            font-size: 0.875rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .chart-toggle:hover {
+            border-color: var(--ryobi-green);
+            background: var(--ryobi-green);
+            color: white;
+        }
+
+        .chart-toggle.active {
+            background: var(--ryobi-green);
+            border-color: var(--ryobi-green);
+            color: white;
+        }
+
+        /* ===== HEADINGS ===== */
+        h2 {
+            font-size: 1.5rem;
+            margin-bottom: 1.5rem;
+            color: var(--text);
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            font-weight: 900;
+        }
+
+        h2::before {
+            content: '';
+            display: inline-block;
+            width: 4px;
+            height: 24px;
+            background: var(--ryobi-green);
+        }
+
+        /* ===== LABELS ===== */
+        label {
+            color: var(--ryobi-green);
+            font-size: 0.875rem;
+            margin-bottom: 0.5rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        /* ===== INPUTS ===== */
+        input[type="date"],
+        input[type="text"],
+        input[type="number"],
+        select {
+            background: var(--ryobi-white);
+            border: 1px solid var(--border);
+            padding: 0.5rem;
+            color: var(--text);
+            font-size: 0.9rem;
+            transition: all 0.3s ease;
+            cursor: pointer;
+            width: 100%;
+        }
+
+        input[type="date"]:hover,
+        input[type="text"]:hover,
+        select:hover {
+            border-color: var(--ryobi-green);
+            background: var(--ryobi-light-grey);
+        }
+
+        input[type="date"]:focus,
+        input[type="text"]:focus,
+        select:focus {
+            outline: none;
+            border-color: var(--ryobi-green);
+            box-shadow: 0 0 0 3px rgba(120, 190, 32, 0.2);
+        }
+
+        /* ===== BUTTONS ===== */
+        button, .btn {
+            text-transform: uppercase;
+            font-weight: 600;
+            letter-spacing: 0.5px;
+            transition: all 0.2s ease;
+            border: none;
+            padding: 0.6rem 1.25rem;
+            font-size: 0.9rem;
+            cursor: pointer;
+        }
+        
+        button, .btn-primary {
+            background-color: var(--ryobi-green);
+            border-color: var(--ryobi-green);
+            color: #ffffff;
+        }
+
+        button:hover, .btn-primary:hover {
+            background-color: var(--ryobi-dark-green);
+            border-color: var(--ryobi-dark-green);
+            color: #ffffff;
+        }
+        
+        .btn-outline-primary {
+            color: var(--ryobi-green);
+            border: 1px solid var(--ryobi-green);
+            background-color: transparent;
+            white-space: nowrap;
+        }
+        
+        .btn-outline-primary:hover {
+            background-color: var(--ryobi-green);
+            color: white;
+            transform: translateY(-1px);
+            box-shadow: 0 2px 4px rgba(120, 190, 32, 0.15);
+        }
+
+        button:focus, .btn:focus, 
+        button:active, .btn:active {
+            outline: none !important;
+            box-shadow: none !important;
+            border-color: var(--ryobi-green) !important;
+        }
+
+        /* ===== TABLES ===== */
+        .table-container {
+            overflow-x: auto;
+            background: var(--ryobi-white);
+            border: 1px solid var(--border);
+        }
+
+        table {
+            width: 100%;
+            border-collapse: separate;
+            border-spacing: 0;
+        }
+
+        th {
+            background: var(--ryobi-grey);
+            color: var(--ryobi-green);
+            padding: 1rem;
+            text-align: left;
+            font-weight: 900;
+            text-transform: uppercase;
+            font-size: 0.875rem;
+            letter-spacing: 1px;
+            position: sticky;
+            top: 0;
+            z-index: 10;
+            border-bottom: 2px solid var(--ryobi-green);
+        }
+
+        td {
+            padding: 1rem;
+            border-bottom: 1px solid var(--border);
+            color: var(--text);
+            transition: all 0.3s ease;
+        }
+
+        tbody tr:hover {
+            background: rgba(120, 190, 32, 0.05);
+        }
+
+        /* ===== CAMPAIGN TABLE ===== */
+        .campaign-details-section {
+            background: var(--ryobi-white);
+            padding: 1.5rem;
+            margin-bottom: 2rem;
+            box-shadow: var(--shadow);
+            border: 1px solid var(--border);
+            border-top: 3px solid var(--ryobi-green);
+        }
+
+        .campaign-filters {
+            display: flex;
+            gap: 1rem;
+            margin-bottom: 1rem;
+            flex-wrap: wrap;
+            align-items: flex-end;
+        }
+
+        .campaign-filter-group {
+            flex: 1;
+            min-width: 150px;
+        }
+
+        .campaign-table-container {
+            overflow-x: auto;
+        }
+
+        .campaign-table {
+            width: 100%;
+            border-collapse: separate;
+            border-spacing: 0;
+        }
+
+        .campaign-table thead th {
+            background: var(--ryobi-grey);
+            color: var(--ryobi-green);
+            padding: 0.75rem;
+            text-align: left;
+            font-weight: 900;
+            text-transform: uppercase;
+            font-size: 0.75rem;
+            letter-spacing: 1px;
+            border-bottom: 2px solid var(--ryobi-green);
+            cursor: pointer;
+        }
+
+        .campaign-table thead th:hover {
+            background: rgba(120, 190, 32, 0.1);
+        }
+
+        .campaign-table tbody td {
+            padding: 0.75rem;
+            border-bottom: 1px solid var(--border);
+            font-size: 0.85rem;
+        }
+
+        .campaign-table tbody tr:hover {
+            background: rgba(120, 190, 32, 0.05);
+        }
+
+        .campaign-pagination {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 1rem 0;
+            flex-wrap: wrap;
+            gap: 0.5rem;
+        }
+
+        .campaign-pagination-info {
+            color: var(--ryobi-silver);
+            font-size: 0.875rem;
+        }
+
+        .campaign-pagination-controls {
+            display: flex;
+            gap: 0.5rem;
+        }
+
+        .campaign-pagination-btn {
+            padding: 0.5rem 1rem;
+            background: var(--ryobi-white);
+            border: 1px solid var(--border);
+            color: var(--text);
+            font-size: 0.85rem;
+            font-weight: 600;
+            cursor: pointer;
+        }
+
+        .campaign-pagination-btn:hover:not(:disabled) {
+            background: var(--ryobi-green);
+            color: white;
+            border-color: var(--ryobi-green);
+        }
+
+        .campaign-pagination-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        /* ===== GROWTH INSIGHT CARDS ===== */
+        .growth-insights {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+            gap: 1.25rem;
+            margin-bottom: 2rem;
+        }
+
+        .growth-insight-card {
+            background: var(--ryobi-white);
+            padding: 1.25rem 1.5rem;
+            border: 1px solid var(--border);
+            border-left: 4px solid var(--ryobi-green);
+            animation: fadeInUp 0.6s ease both;
+            transition: all 0.3s ease;
+        }
+
+        .growth-insight-card:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 8px 24px rgba(120, 190, 32, 0.15);
+        }
+
+        .growth-insight-value {
+            font-size: 2rem;
+            font-weight: 900;
+            color: var(--ryobi-green);
+            margin-bottom: 0.25rem;
+            line-height: 1.1;
+        }
+
+        .growth-insight-label {
+            color: var(--text-muted);
+            font-size: 0.8rem;
+            text-transform: uppercase;
+            letter-spacing: 0.8px;
+            font-weight: 700;
+        }
+
+        .growth-insight-delta {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.25rem;
+            font-size: 0.85rem;
+            font-weight: 700;
+            margin-left: 0.5rem;
+        }
+
+        .growth-insight-delta.positive { color: #198754; }
+        .growth-insight-delta.negative { color: #dc3545; }
+
+        /* ===== COUNTRY FILTER ===== */
+        .country-filter-container {
+            position: relative;
+            width: 100%;
+        }
+
+        .country-filter-button {
+            width: 100%;
+            padding: 0.5rem;
+            background: var(--ryobi-white);
+            border: 1px solid var(--border);
+            color: var(--ryobi-dark-grey);
+            font-size: 0.9rem;
+            cursor: pointer;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            text-align: left;
+        }
+
+        .country-filter-button:hover {
+            border-color: var(--ryobi-green);
+        }
+
+        /* ===== PREFERENCE DISTRIBUTION ===== */
+        .preference-section {
+            background: var(--ryobi-white);
+            padding: 1.5rem;
+            margin-bottom: 2rem;
+            box-shadow: var(--shadow);
+            border: 1px solid var(--border);
+            border-top: 3px solid var(--ryobi-green);
+        }
+
+        .preference-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 1rem;
+        }
+
+        .preference-card {
+            padding: 1rem;
+            background: var(--ryobi-grey);
+            border: 1px solid var(--border);
+            border-left: 4px solid var(--ryobi-green);
+            transition: all 0.3s ease;
+        }
+
+        .preference-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(120, 190, 32, 0.15);
+        }
+
+        .preference-name {
+            font-weight: 700;
+            font-size: 0.85rem;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 0.5rem;
+        }
+
+        .preference-count {
+            font-size: 1.5rem;
+            font-weight: 900;
+            color: var(--ryobi-green);
+        }
+
+        .preference-pct {
+            font-size: 0.85rem;
+            color: var(--ryobi-silver);
+            font-weight: 600;
+        }
+
+        /* ===== SKELETON PLACEHOLDER ===== */
+        .skeleton-banner {
+            background: linear-gradient(135deg, #fff3cd, #ffeaa7);
+            border: 1px solid #ffc107;
+            padding: 2rem;
+            margin-bottom: 2rem;
+            text-align: center;
+        }
+
+        .skeleton-banner h3 {
+            color: #856404;
+            margin-bottom: 0.5rem;
+        }
+
+        .skeleton-banner p {
+            color: #856404;
+            font-size: 0.9rem;
+        }
+
+        .skeleton-banner .icon {
+            font-size: 2rem;
+            margin-bottom: 1rem;
+        }
+
+        /* ===== GA4 SECTION ===== */
+        .ga4-section {
+            background: var(--ryobi-white);
+            padding: 1.5rem;
+            margin-bottom: 2rem;
+            box-shadow: var(--shadow);
+            border: 1px solid var(--border);
+            border-top: 3px solid #4285f4;
+        }
+
+        .ga4-stats-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 1rem;
+            margin-bottom: 1.5rem;
+        }
+
+        .ga4-stat-card {
+            background: var(--ryobi-grey);
+            padding: 1rem;
+            border: 1px solid var(--border);
+            border-left: 4px solid #4285f4;
+            transition: all 0.3s ease;
+        }
+
+        .ga4-stat-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(66, 133, 244, 0.2);
+        }
+
+        .ga4-stat-value {
+            font-size: 1.5rem;
+            font-weight: 900;
+            color: #4285f4;
+        }
+
+        .ga4-stat-label {
+            color: var(--ryobi-silver);
+            font-size: 0.75rem;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            font-weight: 700;
+        }
+
+        /* ===== MYRYOBI SECTION ===== */
+        .myryobi-section {
+            background: var(--ryobi-white);
+            padding: 1.5rem;
+            margin-bottom: 2rem;
+            box-shadow: var(--shadow);
+            border: 1px solid var(--border);
+            border-top: 3px solid var(--ryobi-green);
+        }
+
+        .myryobi-stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 1rem;
+            margin-bottom: 1.5rem;
+        }
+
+        .myryobi-stat-card {
+            background: var(--ryobi-grey);
+            padding: 1rem;
+            border: 1px solid var(--border);
+            border-left: 4px solid var(--ryobi-green);
+        }
+
+        .myryobi-stat-value {
+            font-size: 1.5rem;
+            font-weight: 900;
+            color: var(--ryobi-green);
+        }
+
+        .myryobi-stat-label {
+            color: var(--ryobi-silver);
+            font-size: 0.75rem;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            font-weight: 700;
+        }
+
+        /* ===== SCROLLBAR ===== */
+        ::-webkit-scrollbar {
+            width: 10px;
+            height: 10px;
+        }
+
+        ::-webkit-scrollbar-track {
+            background: var(--ryobi-black);
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: var(--ryobi-green);
+            border: 1px solid var(--ryobi-black);
+        }
+
+        ::-webkit-scrollbar-thumb:hover {
+            background: var(--ryobi-dark-green);
+        }
+
+        /* ===== ANIMATIONS ===== */
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        @keyframes fadeInUp {
+            from { opacity: 0; transform: translateY(30px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .no-data {
+            text-align: center;
+            padding: 3rem;
+            color: var(--text-muted);
+            font-size: 1.1rem;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        .loading {
+            display: none;
+            text-align: center;
+            padding: 2rem;
+            color: var(--text-muted);
+        }
+
+        .spinner {
+            display: inline-block;
+            width: 40px;
+            height: 40px;
+            border: 4px solid var(--ryobi-dark-grey);
+            border-top-color: var(--ryobi-green);
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+
+        /* ===== CONTAINER ===== */
+        .container.mt-4 {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding-left: 2rem;
+            padding-right: 2rem;
+        }
+
+        /* ===== IFRAME EMBED MODE ===== */
+        body.in-iframe .navbar {
+            display: none !important;
+        }
+
+        body.in-iframe .dashboard-tabs {
+            top: 0;
+        }
+
+        /* ===== RESPONSIVE ===== */
+        @media (max-width: 768px) {
+            .container.mt-4 {
+                padding-left: 1rem;
+                padding-right: 1rem;
+            }
+
+            .stats-cards {
+                grid-template-columns: 1fr;
+            }
+
+            .email-stats-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .ga4-stats-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .email-period-selector {
+                flex-direction: column;
+            }
+
+            .campaign-filters {
+                flex-direction: column;
+            }
+
+            .chart-container {
+                height: 300px;
+            }
+
+            .email-chart-container {
+                height: 250px;
+            }
+
+            th, td {
+                padding: 0.5rem;
+                font-size: 0.8rem;
+            }
+
+            .global-filters {
+                flex-direction: column;
+            }
+        }
+
+        @media (max-width: 575px) {
+            .navbar-brand strong {
+                display: none;
+            }
+        }
+    </style>
+</head>
+<body>
+    <script>if(window.self!==window.top){document.body.classList.add('in-iframe');}</script>
+    <nav class="navbar navbar-expand-lg navbar-dark">
+        <a class="navbar-brand" href="#" onclick="switchTab('overview')">
+            <!-- RYOBI Logo - TODO: Replace with actual RYOBI logo URL from SFMC Content Builder -->
+            <span style="font-size: 1.8rem; font-weight: 900; color: var(--ryobi-green);">RYOBI</span>
+            <strong>Subscriber Analytics Dashboard</strong>
+        </a>
+        
+        <div class="navbar-nav ms-auto">
+            <span class="navbar-text text-white">
+                Logged in as: <strong id="username">%%=v(@username)=%%</strong>
+            </span>
+        </div>
+    </nav>
+
+    <div class="container mt-4">
+        <div id="infoBox" class="info-box"></div>
+
+        <!-- TABBED DASHBOARD INTERFACE -->
+        <div class="dashboard-tabs-container">
+            
+            <!-- Global Filters Bar -->
+            <div class="global-filters">
+                <div class="global-filter-group">
+                    <label for="global-date-from">Date From</label>
+                    <input type="date" id="global-date-from" onchange="applyGlobalFiltersDebounced()">
+                </div>
+                <div class="global-filter-group">
+                    <label for="global-date-to">Date To</label>
+                    <input type="date" id="global-date-to" onchange="applyGlobalFiltersDebounced()">
+                </div>
+                <div class="global-filter-group">
+                    <label for="global-country">Country</label>
+                    <select id="global-country" onchange="applyGlobalFiltersDebounced()">
+                        <option value="">All Countries</option>
+                    </select>
+                </div>
+            </div>
+            
+            <!-- Mobile Tab Dropdown -->
+            <div class="mobile-tab-dropdown">
+                <select id="mobileTabSelector" onchange="switchTab(this.value)">
+                    <option value="overview">Overview</option>
+                    <option value="email">Email Analytics</option>
+                    <option value="campaigns">Campaigns</option>
+                    <option value="growth">Growth Trends</option>
+                    <option value="signups">Signup Sources</option>
+                    <option value="myryobi">MyRyobi</option>
+                    <option value="ga4">GA4 Analytics</option>
+                </select>
+            </div>
+            
+            <!-- Tab Navigation Bar -->
+            <nav class="dashboard-tabs">
+                <button class="tab-btn active" data-tab="overview" onclick="switchTab('overview')">
+                    <i class="bi bi-speedometer2"></i> Overview
+                </button>
+                <button class="tab-btn" data-tab="email" onclick="switchTab('email')">
+                    <i class="bi bi-envelope"></i> Email Analytics
+                </button>
+                <button class="tab-btn" data-tab="campaigns" onclick="switchTab('campaigns')">
+                    <i class="bi bi-megaphone"></i> Campaigns
+                </button>
+                <button class="tab-btn" data-tab="growth" onclick="switchTab('growth')">
+                    <i class="bi bi-graph-up"></i> Growth Trends
+                </button>
+                <button class="tab-btn" data-tab="signups" onclick="switchTab('signups')">
+                    <i class="bi bi-person-plus"></i> Signup Sources
+                </button>
+                <button class="tab-btn" data-tab="myryobi" onclick="switchTab('myryobi')">
+                    <i class="bi bi-person-gear"></i> MyRyobi
+                </button>
+                <button class="tab-btn" data-tab="ga4" onclick="switchTab('ga4')">
+                    <i class="bi bi-bar-chart-line"></i> GA4 Analytics
+                </button>
+            </nav>
+            
+            <!-- Tab Content Areas -->
+            <div class="tab-content">
+                
+                <!-- ============================================================ -->
+                <!-- OVERVIEW TAB                                                 -->
+                <!-- ============================================================ -->
+                <div class="tab-pane active" id="overview-tab">
+
+                    <!-- KPI Stats Cards -->
+                    <div class="stats-cards" id="statsCards">
+                        <div class="stat-card">
+                            <div class="stat-value" id="totalSubscribers">0</div>
+                            <div class="stat-label">Total Subscribers</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-value" id="totalCountries">0</div>
+                            <div class="stat-label">Active Countries</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-value" id="totalCampaigns">0</div>
+                            <div class="stat-label">Campaigns Sent</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-value" id="avgSubscribersPerCountry">0</div>
+                            <div class="stat-label">Average per Country</div>
+                        </div>
+                    </div>
+
+                    <!-- Segment Subscriber Counts -->
+                    <div class="data-section">
+                        <h2>Segment Subscriber Counts</h2>
+                        <div class="stats-cards" id="segmentStats">
+                            <div class="stat-card">
+                                <div class="stat-value" id="segmentCompetitions">0</div>
+                                <div class="stat-label">Competitions & Giveaways</div>
+                            </div>
+                            <div class="stat-card">
+                                <div class="stat-value" id="segmentOffers">0</div>
+                                <div class="stat-label">Exclusive Offers & Promotions</div>
+                            </div>
+                            <div class="stat-card">
+                                <div class="stat-value" id="segmentNewProducts">0</div>
+                                <div class="stat-label">New Product Launches</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Subscriber Count by Country -->
+                    <div class="data-section" id="subscriberByCountrySection">
+                        <h2>Subscriber Count by Country</h2>
+                        <div class="chart-container" id="subscriberCountryChartContainer">
+                            <canvas id="subscriberCountryChart"></canvas>
+                        </div>
+                    </div>
+
+                    <!-- Preference Distribution -->
+                    <div class="preference-section" id="preferenceDistributionSection">
+                        <h2>Preference Distribution</h2>
+                        <div class="chart-container" style="height: 350px;">
+                            <canvas id="preferenceDistributionChart"></canvas>
+                        </div>
+                        <div class="preference-grid" id="preferenceGrid">
+                            <!-- Populated by JavaScript -->
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- ============================================================ -->
+                <!-- EMAIL ANALYTICS TAB                                          -->
+                <!-- ============================================================ -->
+                <div class="tab-pane" id="email-tab">
+                    <div class="email-analytics-section" id="emailAnalyticsSection">
+                        <h2>Email Campaign Performance Analytics</h2>
+                        
+                        <!-- Period selector -->
+                        <div class="email-period-selector mb-4">
+                            <button class="period-btn active" onclick="setEmailPeriod('current-month', event)">Current Month</button>
+                            <button class="period-btn" onclick="setEmailPeriod('last-month', event)">Last Month</button>
+                            <button class="period-btn" onclick="setEmailPeriod('last-3-months', event)">Last 3 Months</button>
+                            <button class="period-btn" onclick="setEmailPeriod('all-time', event)">All Time</button>
+                        </div>
+                        
+                        <!-- KPI Stats Grid -->
+                        <div class="email-stats-grid" id="emailStatsGrid">
+                            <div class="email-stat-card">
+                                <div class="email-stat-value" id="emailTotalSent">0</div>
+                                <div class="email-stat-label">Total Sent</div>
+                                <div class="stat-comparison neutral" id="emailTotalSentDelta"></div>
+                            </div>
+                            <div class="email-stat-card">
+                                <div class="email-stat-value" id="emailTotalDelivered">0</div>
+                                <div class="email-stat-label">Total Delivered</div>
+                                <div class="stat-comparison neutral" id="emailTotalDeliveredDelta"></div>
+                            </div>
+                            <div class="email-stat-card">
+                                <div class="email-stat-value" id="emailDeliveryRate">0%</div>
+                                <div class="email-stat-label">Delivery Rate</div>
+                                <div class="stat-comparison neutral" id="emailDeliveryRateDelta"></div>
+                            </div>
+                            <div class="email-stat-card">
+                                <div class="email-stat-value" id="emailTotalOpens">0</div>
+                                <div class="email-stat-label">Total Opens</div>
+                                <div class="stat-comparison neutral" id="emailTotalOpensDelta"></div>
+                            </div>
+                            <div class="email-stat-card">
+                                <div class="email-stat-value" id="emailUniqueOpens">0</div>
+                                <div class="email-stat-label">Unique Opens</div>
+                                <div class="stat-comparison neutral" id="emailUniqueOpensDelta"></div>
+                            </div>
+                            <div class="email-stat-card">
+                                <div class="email-stat-value" id="emailOpenRate">0%</div>
+                                <div class="email-stat-label">Open Rate</div>
+                                <div class="stat-comparison neutral" id="emailOpenRateDelta"></div>
+                            </div>
+                            <div class="email-stat-card">
+                                <div class="email-stat-value" id="emailTotalClicks">0</div>
+                                <div class="email-stat-label">Total Clicks</div>
+                                <div class="stat-comparison neutral" id="emailTotalClicksDelta"></div>
+                            </div>
+                            <div class="email-stat-card">
+                                <div class="email-stat-value" id="emailUniqueClicks">0</div>
+                                <div class="email-stat-label">Unique Clicks</div>
+                                <div class="stat-comparison neutral" id="emailUniqueClicksDelta"></div>
+                            </div>
+                            <div class="email-stat-card">
+                                <div class="email-stat-value" id="emailCTR">0%</div>
+                                <div class="email-stat-label">Click-Through Rate</div>
+                                <div class="stat-comparison neutral" id="emailCTRDelta"></div>
+                            </div>
+                            <div class="email-stat-card">
+                                <div class="email-stat-value" id="emailTotalUnsubs">0</div>
+                                <div class="email-stat-label">Total Unsubscribes</div>
+                                <div class="stat-comparison neutral" id="emailTotalUnsubsDelta"></div>
+                            </div>
+                            <div class="email-stat-card">
+                                <div class="email-stat-value" id="emailUnsubRate">0%</div>
+                                <div class="email-stat-label">Unsubscribe Rate</div>
+                                <div class="stat-comparison neutral" id="emailUnsubRateDelta"></div>
+                            </div>
+                            <div class="email-stat-card">
+                                <div class="email-stat-value" id="emailTotalBounces">0</div>
+                                <div class="email-stat-label">Total Bounces</div>
+                                <div class="stat-comparison neutral" id="emailTotalBouncesDelta"></div>
+                            </div>
+                            <div class="email-stat-card">
+                                <div class="email-stat-value" id="emailBounceRate">0%</div>
+                                <div class="email-stat-label">Bounce Rate</div>
+                                <div class="stat-comparison neutral" id="emailBounceRateDelta"></div>
+                            </div>
+                        </div>
+
+                        <!-- Performance Chart -->
+                        <div class="email-chart-container">
+                            <canvas id="emailChart"></canvas>
+                        </div>
+
+                        <!-- Monthly Breakdown Table -->
+                        <div class="email-table-container">
+                            <table class="email-table">
+                                <thead>
+                                    <tr>
+                                        <th>Period</th>
+                                        <th>Total Sent</th>
+                                        <th>Delivered</th>
+                                        <th>Delivery %</th>
+                                        <th>Opens</th>
+                                        <th>Unique Opens</th>
+                                        <th>Open %</th>
+                                        <th>Clicks</th>
+                                        <th>Unique Clicks</th>
+                                        <th>CTR %</th>
+                                        <th>Unsubs</th>
+                                        <th>Unsub %</th>
+                                        <th>Bounces</th>
+                                        <th>Bounce %</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="emailTableBody">
+                                    <!-- Populated by JavaScript -->
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- ============================================================ -->
+                <!-- CAMPAIGNS TAB                                                -->
+                <!-- ============================================================ -->
+                <div class="tab-pane" id="campaigns-tab">
+                    <div class="campaign-details-section" id="campaignDetailsSection">
+                        <h2>Campaign Performance Details</h2>
+                        
+                        <div class="campaign-filters">
+                            <div class="campaign-filter-group">
+                                <label for="campaignSearchInput">Search Email/Journey:</label>
+                                <input type="text" id="campaignSearchInput" placeholder="Type to search..." oninput="filterCampaigns()">
+                            </div>
+                            <div class="campaign-filter-group">
+                                <label for="campaignStartDate">From Date:</label>
+                                <input type="date" id="campaignStartDate" onchange="filterCampaigns()">
+                            </div>
+                            <div class="campaign-filter-group">
+                                <label for="campaignEndDate">To Date:</label>
+                                <input type="date" id="campaignEndDate" onchange="filterCampaigns()">
+                            </div>
+                            <div class="campaign-filter-group">
+                                <label>&nbsp;</label>
+                                <button class="btn btn-outline-primary" onclick="clearCampaignFilters()">Clear Filters</button>
+                            </div>
+                        </div>
+                        
+                        <div style="display: flex; align-items: center; gap: 10px; padding: 10px 0; margin-bottom: 1rem; border-bottom: 1px solid #e8e8e8;">
+                            <input type="checkbox" id="hideTestSends" checked onchange="filterCampaigns()" style="width: 16px; height: 16px; cursor: pointer; margin: 0; accent-color: #78BE20;">
+                            <label for="hideTestSends" style="margin: 0; cursor: pointer; font-size: 13px; color: #666; user-select: none;">
+                                Hide test sends <span style="color: #999; font-size: 12px;">(excludes [Test]/[Draft] and single-recipient emails)</span>
+                            </label>
+                        </div>
+
+                        <!-- Campaign Rankings -->
+                        <div style="margin-bottom: 1.5rem;">
+                            <h3 style="font-size: 1rem; font-weight: 700; color: var(--ryobi-green); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 1rem;">Campaign Rankings</h3>
+                            <div class="chart-controls" style="margin-bottom: 1rem;">
+                                <button class="chart-toggle active" onclick="setRankingView('openRate', event)">By Open Rate</button>
+                                <button class="chart-toggle" onclick="setRankingView('clickRate', event)">By CTR</button>
+                                <button class="chart-toggle" onclick="setRankingView('unsubscribeRate', event)">By Unsub Rate</button>
+                            </div>
+                            <div class="chart-container" style="height: 300px;" id="campaignRankingChartContainer">
+                                <canvas id="campaignRankingChart"></canvas>
+                            </div>
+                        </div>
+
+                        <!-- Campaign count KPI -->
+                        <div style="padding: 0.75rem 1rem; background: var(--ryobi-grey); border-left: 4px solid var(--ryobi-green); margin-bottom: 1rem; font-size: 0.9rem;">
+                            <strong style="color: var(--ryobi-green);">Total Campaigns:</strong> <span id="campaignTotalCount">0</span> individual campaigns in this period
+                        </div>
+
+                        <div class="campaign-table-container">
+                            <table class="campaign-table" id="campaignTable">
+                                <thead>
+                                    <tr>
+                                        <th onclick="sortCampaigns('sendDate')">Send Date</th>
+                                        <th onclick="sortCampaigns('emailName')">Email Name</th>
+                                        <th onclick="sortCampaigns('emailSubject')">Subject</th>
+                                        <th onclick="sortCampaigns('journeyName')">Journey</th>
+                                        <th onclick="sortCampaigns('totalSent')">Sent</th>
+                                        <th onclick="sortCampaigns('deliveryRate')">Delivery %</th>
+                                        <th onclick="sortCampaigns('openRate')">Open %</th>
+                                        <th onclick="sortCampaigns('clickRate')">CTR %</th>
+                                        <th onclick="sortCampaigns('clickToOpenRate')">CTOR %</th>
+                                        <th onclick="sortCampaigns('bounceRate')">Bounce %</th>
+                                        <th onclick="sortCampaigns('unsubscribeRate')">Unsub %</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="campaignTableBody">
+                                    <!-- Populated by JavaScript -->
+                                </tbody>
+                            </table>
+                        </div>
+
+                        <div class="campaign-pagination">
+                            <div class="campaign-pagination-info" id="campaignPaginationInfo">
+                                Showing 0 of 0 campaigns
+                            </div>
+                            <div class="campaign-pagination-controls">
+                                <button class="campaign-pagination-btn" id="campaignPrevBtn" onclick="changeCampaignPage(-1)">&#9664; Previous</button>
+                                <button class="campaign-pagination-btn" id="campaignNextBtn" onclick="changeCampaignPage(1)">Next &#9654;</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- ============================================================ -->
+                <!-- GROWTH TRENDS TAB                                            -->
+                <!-- ============================================================ -->
+                <div class="tab-pane" id="growth-tab">
+                    <!-- Growth Insight Cards -->
+                    <div class="growth-insights" id="growthInsightCards">
+                        <div class="growth-insight-card">
+                            <div class="growth-insight-value" id="growthCurrentTotal">-</div>
+                            <div class="growth-insight-label">Current Total Subscribers</div>
+                        </div>
+                        <div class="growth-insight-card">
+                            <div class="growth-insight-value" id="growthNetChange">-</div>
+                            <div class="growth-insight-label">Net Change (Period)</div>
+                        </div>
+                        <div class="growth-insight-card">
+                            <div class="growth-insight-value" id="growthRate">-</div>
+                            <div class="growth-insight-label">Growth Rate</div>
+                        </div>
+                        <div class="growth-insight-card">
+                            <div class="growth-insight-value" id="growthAvgDaily">-</div>
+                            <div class="growth-insight-label">Avg. Daily Growth</div>
+                        </div>
+                    </div>
+
+                    <!-- Growth Chart -->
+                    <div class="chart-section" id="growthChartSection">
+                        <h2>Total Subscriber Count Over Time</h2>
+                        <div class="chart-controls">
+                            <button class="chart-toggle active" onclick="toggleChartType('line')">Line Chart</button>
+                            <button class="chart-toggle" onclick="toggleChartType('bar')">Bar Chart</button>
+                            <button class="chart-toggle" onclick="toggleChartGrouping('day')">Daily</button>
+                            <button class="chart-toggle active" onclick="toggleChartGrouping('week')">Weekly</button>
+                            <button class="chart-toggle" onclick="toggleChartGrouping('month')">Monthly</button>
+                        </div>
+                        <div class="chart-container">
+                            <canvas id="growthChart"></canvas>
+                        </div>
+                    </div>
+
+                    <!-- Subscriber by Country Chart -->
+                    <div class="data-section">
+                        <h2>Subscriber Count by Country Over Time</h2>
+                        <div class="chart-container">
+                            <canvas id="growthCountryChart"></canvas>
+                        </div>
+                    </div>
+
+                    <!-- Preference Trends Over Time -->
+                    <div class="data-section">
+                        <h2>Preference Trends Over Time</h2>
+                        <div class="chart-container">
+                            <canvas id="preferenceTrendChart"></canvas>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- ============================================================ -->
+                <!-- SIGNUP SOURCES TAB (SKELETON)                                -->
+                <!-- ============================================================ -->
+                <div class="tab-pane" id="signups-tab">
+                    <div class="data-section">
+                        <h2>Signup Source Performance</h2>
+                        
+                        <div class="skeleton-banner">
+                            <div class="icon">&#128736;</div>
+                            <h3>Coming Soon</h3>
+                            <p>Signup identifier tracking is pending data source confirmation.<br>
+                            This tab will display sign-up identifier counts, new signups over time, and performance by source.</p>
+                        </div>
+
+                        <!-- Skeleton table structure -->
+                        <div class="table-container" style="opacity: 0.4;">
+                            <table>
+                                <thead>
+                                    <tr>
+                                        <th>Signup Identifier</th>
+                                        <th>New Signups</th>
+                                        <th>Country</th>
+                                        <th>First Seen</th>
+                                        <th>Last Active</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="signupTableBody">
+                                    <tr><td colspan="5" class="no-data">Awaiting data source configuration</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                        
+                        <!-- Skeleton chart -->
+                        <div class="chart-container" style="margin-top: 1.5rem; opacity: 0.4;">
+                            <canvas id="signupTrendChart"></canvas>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- ============================================================ -->
+                <!-- MYRYOBI TAB (SKELETON)                                       -->
+                <!-- ============================================================ -->
+                <div class="tab-pane" id="myryobi-tab">
+                    <div class="myryobi-section" id="myRyobiSection">
+                        <h2>MyRyobi Account Analytics</h2>
+                        
+                        <div class="skeleton-banner">
+                            <div class="icon">&#128736;</div>
+                            <h3>Coming Soon</h3>
+                            <p>MyRyobi account data integration is pending.<br>
+                            This tab will display account sign-ups, holders, and registration analytics similar to Milwaukee's MyAccount.</p>
+                        </div>
+
+                        <!-- Skeleton stats -->
+                        <div class="myryobi-stats-grid" style="opacity: 0.4;">
+                            <div class="myryobi-stat-card">
+                                <div class="myryobi-stat-value">-</div>
+                                <div class="myryobi-stat-label">Total Accounts</div>
+                            </div>
+                            <div class="myryobi-stat-card">
+                                <div class="myryobi-stat-value">-</div>
+                                <div class="myryobi-stat-label">Marketing Opt-In</div>
+                            </div>
+                            <div class="myryobi-stat-card">
+                                <div class="myryobi-stat-value">-</div>
+                                <div class="myryobi-stat-label">Active Countries</div>
+                            </div>
+                            <div class="myryobi-stat-card">
+                                <div class="myryobi-stat-value">-</div>
+                                <div class="myryobi-stat-label">Avg. Registrations/Day</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- ============================================================ -->
+                <!-- GA4 ANALYTICS TAB (SKELETON)                                 -->
+                <!-- ============================================================ -->
+                <div class="tab-pane" id="ga4-tab">
+                    <div class="ga4-section" id="ga4Section">
+                        <h2 style="color: #4285f4;">GA4 Analytics</h2>
+                        
+                        <div class="skeleton-banner" style="background: linear-gradient(135deg, #e8f0fe, #d2e3fc); border-color: #4285f4;">
+                            <div class="icon">&#128202;</div>
+                            <h3 style="color: #1967d2;">Coming Soon - GA4 Integration</h3>
+                            <p style="color: #1967d2;">Google Analytics 4 data pipeline integration is pending configuration.<br>
+                            This tab will display revenue, transactions, and conversion rate per market.<br><br>
+                            <strong>Required:</strong> GA4 API access, service account setup, and data pipeline configuration.</p>
+                        </div>
+
+                        <!-- GA4 Country Selector (skeleton) -->
+                        <div style="margin-bottom: 1.5rem; opacity: 0.4;">
+                            <label for="ga4CountrySelect">Select Market:</label>
+                            <select id="ga4CountrySelect" style="max-width: 300px;">
+                                <option value="">All Markets</option>
+                                <option value="UK">United Kingdom</option>
+                                <option value="DE">Germany</option>
+                                <option value="FR">France</option>
+                                <option value="IT">Italy</option>
+                                <option value="ES">Spain</option>
+                                <option value="NL">Netherlands</option>
+                                <option value="PL">Poland</option>
+                                <option value="SE">Sweden</option>
+                                <option value="NO">Norway</option>
+                                <option value="DK">Denmark</option>
+                                <option value="FI">Finland</option>
+                                <option value="BE">Belgium</option>
+                                <option value="CZ">Czech Republic</option>
+                                <option value="HU">Hungary</option>
+                                <option value="RO">Romania</option>
+                                <option value="PT">Portugal</option>
+                                <option value="EE">Estonia</option>
+                                <option value="LV">Latvia</option>
+                                <option value="LT">Lithuania</option>
+                            </select>
+                        </div>
+
+                        <!-- GA4 KPI cards (skeleton) -->
+                        <div class="ga4-stats-grid" style="opacity: 0.4;">
+                            <div class="ga4-stat-card">
+                                <div class="ga4-stat-value">-</div>
+                                <div class="ga4-stat-label">Total Revenue</div>
+                            </div>
+                            <div class="ga4-stat-card">
+                                <div class="ga4-stat-value">-</div>
+                                <div class="ga4-stat-label">Total Transactions</div>
+                            </div>
+                            <div class="ga4-stat-card">
+                                <div class="ga4-stat-value">-</div>
+                                <div class="ga4-stat-label">Conversion Rate</div>
+                            </div>
+                        </div>
+
+                        <!-- GA4 Chart (skeleton) -->
+                        <div class="chart-container" style="opacity: 0.4; margin-top: 1.5rem;">
+                            <canvas id="ga4Chart"></canvas>
+                        </div>
+
+                        <!-- GA4 Table (skeleton) -->
+                        <div class="table-container" style="opacity: 0.4; margin-top: 1.5rem;">
+                            <table>
+                                <thead>
+                                    <tr>
+                                        <th>Market</th>
+                                        <th>Revenue</th>
+                                        <th>Transactions</th>
+                                        <th>Conversion Rate</th>
+                                        <th>Avg. Order Value</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <tr><td colspan="5" class="no-data">Awaiting GA4 data pipeline configuration</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+                
+            </div>
+        </div>
+
+    </div><!-- End container -->
+
+    <script>
+        // ==================================================================================
+        // == RYOBI DASHBOARD - CLIENT-SIDE JAVASCRIPT                                    ==
+        // ==================================================================================
+
+        // Ryobi countries (19 European markets)
+        const RYOBI_COUNTRIES = {
+            'UK': 'United Kingdom', 'SE': 'Sweden', 'RO': 'Romania', 'PT': 'Portugal',
+            'PL': 'Poland', 'NO': 'Norway', 'NL': 'Netherlands', 'LT': 'Lithuania',
+            'LV': 'Latvia', 'HU': 'Hungary', 'IT': 'Italy', 'FR': 'France',
+            'FI': 'Finland', 'ES': 'Spain', 'EE': 'Estonia', 'DK': 'Denmark',
+            'BE': 'Belgium', 'DE': 'Germany', 'CZ': 'Czech Republic'
+        };
+
+        // Ryobi preference types (11 categories)
+        const RYOBI_PREFERENCES = {
+            'New_Product_Launches': 'New Product Launches',
+            'Exclusive_Offers': 'Exclusive Offers & Promotions',
+            'Competitions_Giveaways': 'Competitions & Giveaways',
+            'RYOBI_One': 'RYOBI One+',
+            'MAXPOWER': 'MAXPOWER',
+            'USB_Lithium': 'USB Lithium',
+            'Crafting': 'Crafting',
+            'Automotive': 'Automotive',
+            'Camping': 'Camping',
+            'Cleaning': 'Cleaning',
+            'Gardening': 'Gardening'
+        };
+
+        // RYOBI brand colour for charts
+        const RYOBI_GREEN = '#78BE20';
+        const RYOBI_DARK_GREEN = '#5a9a10';
+        
+        // Country colours for charts
+        const COUNTRY_COLOURS = [
+            '#78BE20', '#4CAF50', '#2196F3', '#FF9800', '#E91E63',
+            '#9C27B0', '#00BCD4', '#FF5722', '#607D8B', '#8BC34A',
+            '#3F51B5', '#FFC107', '#795548', '#009688', '#CDDC39',
+            '#673AB7', '#F44336', '#03A9F4', '#FF6F00'
+        ];
+
+        // Dashboard state
+        var tabState = {
+            activeTab: 'overview',
+            filters: {
+                dateFrom: '',
+                dateTo: '',
+                country: ''
+            }
+        };
+
+        // Chart instances
+        var subscriberCountryChart = null;
+        var preferenceDistributionChart = null;
+        var emailChart = null;
+        var campaignRankingChart = null;
+        var growthChart = null;
+        var growthCountryChart = null;
+        var preferenceTrendChart = null;
+
+        // Campaign state
+        var campaignSortColumn = 'sendDate';
+        var campaignSortDirection = 'desc';
+        var campaignCurrentPage = 1;
+        var campaignPageSize = 25;
+        var campaignFilteredData = [];
+        var campaignRankingView = 'openRate';
+
+        // Chart state
+        var chartType = 'line';
+        var chartGrouping = 'week';
+
+        // Debounce timer
+        var globalFilterDebounceTimer = null;
+
+        // ==================================================================================
+        // == INITIALIZATION                                                               ==
+        // ==================================================================================
+        document.addEventListener('DOMContentLoaded', function() {
+            updateInfoBox();
+            initializeGlobalFilters();
+            
+            var urlParams = new URLSearchParams(window.location.search);
+            var initialTab = urlParams.get('tab') || 'overview';
+            
+            switchTab(initialTab);
+        });
+
+        // ==================================================================================
+        // == TAB SWITCHING                                                                ==
+        // ==================================================================================
+        function switchTab(tabName) {
+            var currentTab = new URLSearchParams(window.location.search).get('tab') || 'overview';
+            
+            if (currentTab !== tabName) {
+                // If inside loader iframe, delegate to parent
+                if (window.parent !== window) {
+                    try {
+                        window.parent.postMessage({ type: 'tabSwitch', tab: tabName }, '*');
+                    } catch(e) {}
+                    return;
+                }
+                // Standalone: reload with new tab param
+                var url = new URL(window.location);
+                url.searchParams.set('tab', tabName);
+                url.searchParams.set('sessionkey', sessionKey);
+                url.searchParams.set('u', currentUser);
+                window.location.href = url.toString();
+                return;
+            }
+            
+            // Same tab - update UI
+            document.querySelectorAll('.tab-btn').forEach(function(btn) {
+                btn.classList.toggle('active', btn.dataset.tab === tabName);
+            });
+            
+            var mobileSelector = document.getElementById('mobileTabSelector');
+            if (mobileSelector) mobileSelector.value = tabName;
+            
+            document.querySelectorAll('.tab-pane').forEach(function(pane) {
+                pane.classList.toggle('active', pane.id === tabName + '-tab');
+            });
+            
+            tabState.activeTab = tabName;
+            initializeTabContent(tabName);
+        }
+
+        function initializeTabContent(tabName) {
+            switch(tabName) {
+                case 'overview':
+                    setTimeout(function() {
+                        renderOverviewStats();
+                        renderSegmentStats();
+                        renderSubscriberCountryChart();
+                        renderPreferenceDistribution();
+                    }, 100);
+                    break;
+                case 'email':
+                    setTimeout(function() {
+                        renderEmailAnalytics();
+                    }, 100);
+                    break;
+                case 'campaigns':
+                    setTimeout(function() {
+                        renderCampaignTable();
+                        renderCampaignRankingChart();
+                    }, 100);
+                    break;
+                case 'growth':
+                    setTimeout(function() {
+                        renderGrowthInsights();
+                        renderGrowthChart();
+                        renderGrowthCountryChart();
+                        renderPreferenceTrendChart();
+                    }, 100);
+                    break;
+                case 'signups':
+                    // Skeleton - no rendering needed yet
+                    break;
+                case 'myryobi':
+                    // Skeleton - no rendering needed yet
+                    break;
+                case 'ga4':
+                    // Skeleton - no rendering needed yet
+                    break;
+            }
+        }
+
+        // ==================================================================================
+        // == UTILITY FUNCTIONS                                                            ==
+        // ==================================================================================
+        function formatNumber(num) {
+            if (num === null || num === undefined) return '0';
+            return num.toLocaleString('en-GB');
+        }
+
+        function formatPct(value) {
+            if (value === null || value === undefined) return '0.00%';
+            return value.toFixed(2) + '%';
+        }
+
+        function parseDate(dateStr) {
+            if (!dateStr) return new Date();
+            var mmddyyyyMatch = dateStr.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+            if (mmddyyyyMatch) {
+                return new Date(parseInt(mmddyyyyMatch[3]), parseInt(mmddyyyyMatch[1]) - 1, parseInt(mmddyyyyMatch[2]));
+            }
+            var d = new Date(dateStr);
+            return isNaN(d.getTime()) ? new Date() : d;
+        }
+
+        function formatDateOnly(dateStr) {
+            try {
+                var d = parseDate(dateStr);
+                return d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
+            } catch(e) {
+                return dateStr || '';
+            }
+        }
+
+        function getMonthName(monthNum) {
+            var months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+            return months[(monthNum - 1)] || '';
+        }
+
+        // ==================================================================================
+        // == INFO BOX                                                                     ==
+        // ==================================================================================
+        function updateInfoBox() {
+            var infoBox = document.getElementById('infoBox');
+            if (!infoBox) return;
+            
+            if (typeof errorMsg !== 'undefined' && errorMsg) {
+                infoBox.className = 'info-box error';
+                infoBox.innerHTML = '<strong>Error:</strong> ' + errorMsg;
+            } else if (typeof debugInfo !== 'undefined' && debugInfo) {
+                infoBox.className = 'info-box';
+                infoBox.innerHTML = '<strong>Debug:</strong> ' + debugInfo;
+            } else {
+                infoBox.style.display = 'none';
+            }
+        }
+
+        // ==================================================================================
+        // == GLOBAL FILTERS                                                               ==
+        // ==================================================================================
+        function initializeGlobalFilters() {
+            var countrySelect = document.getElementById('global-country');
+            if (!countrySelect) return;
+            
+            countrySelect.innerHTML = '<option value="">All Countries</option>';
+            var countries = Object.keys(RYOBI_COUNTRIES).sort();
+            countries.forEach(function(code) {
+                var option = document.createElement('option');
+                option.value = code;
+                option.textContent = code + ' - ' + RYOBI_COUNTRIES[code];
+                countrySelect.appendChild(option);
+            });
+        }
+
+        function applyGlobalFiltersDebounced() {
+            if (globalFilterDebounceTimer) clearTimeout(globalFilterDebounceTimer);
+            globalFilterDebounceTimer = setTimeout(applyGlobalFilters, 300);
+        }
+
+        function applyGlobalFilters() {
+            tabState.filters.dateFrom = document.getElementById('global-date-from').value;
+            tabState.filters.dateTo = document.getElementById('global-date-to').value;
+            tabState.filters.country = document.getElementById('global-country').value;
+            
+            // Re-render current tab with filters
+            initializeTabContent(tabState.activeTab);
+        }
+
+        function getFilteredSubscriberData() {
+            if (typeof subscriberCountData === 'undefined' || !Array.isArray(subscriberCountData)) return [];
+            
+            var filtered = subscriberCountData.slice();
+            var fromDate = tabState.filters.dateFrom ? new Date(tabState.filters.dateFrom) : null;
+            var toDate = tabState.filters.dateTo ? new Date(tabState.filters.dateTo) : null;
+            if (toDate) toDate.setHours(23, 59, 59, 999);
+            var country = tabState.filters.country;
+            
+            return filtered.filter(function(item) {
+                if (!item) return false;
+                if (country && item.countryCode !== country) return false;
+                if (fromDate || toDate) {
+                    var d = parseDate(item.logDate);
+                    if (fromDate && d < fromDate) return false;
+                    if (toDate && d > toDate) return false;
+                }
+                return true;
+            });
+        }
+
+        function getFilteredPreferenceData() {
+            if (typeof preferenceCountData === 'undefined' || !Array.isArray(preferenceCountData)) return [];
+            
+            var filtered = preferenceCountData.slice();
+            var fromDate = tabState.filters.dateFrom ? new Date(tabState.filters.dateFrom) : null;
+            var toDate = tabState.filters.dateTo ? new Date(tabState.filters.dateTo) : null;
+            if (toDate) toDate.setHours(23, 59, 59, 999);
+            var country = tabState.filters.country;
+            
+            return filtered.filter(function(item) {
+                if (!item) return false;
+                if (country && item.countryCode !== country) return false;
+                if (fromDate || toDate) {
+                    var d = parseDate(item.logDate);
+                    if (fromDate && d < fromDate) return false;
+                    if (toDate && d > toDate) return false;
+                }
+                return true;
+            });
+        }
+
+        // ==================================================================================
+        // == OVERVIEW TAB RENDERING                                                       ==
+        // ==================================================================================
+        function renderOverviewStats() {
+            var data = getFilteredSubscriberData();
+            if (!data.length) return;
+            
+            // Get latest date's data
+            var latestDate = '';
+            data.forEach(function(item) {
+                if (item.logDate > latestDate) latestDate = item.logDate;
+            });
+            
+            var latestData = data.filter(function(item) { return item.logDate === latestDate; });
+            var totalSubs = 0;
+            var countries = {};
+            latestData.forEach(function(item) {
+                totalSubs += item.subscriberCount;
+                countries[item.countryCode] = true;
+            });
+            
+            var countryCount = Object.keys(countries).length;
+            
+            document.getElementById('totalSubscribers').textContent = formatNumber(totalSubs);
+            document.getElementById('totalCountries').textContent = countryCount;
+            document.getElementById('avgSubscribersPerCountry').textContent = countryCount > 0 ? formatNumber(Math.round(totalSubs / countryCount)) : '0';
+            
+            // Campaign count comes from campaignMetricsData (may not be loaded on overview tab)
+            if (typeof campaignMetricsData !== 'undefined' && Array.isArray(campaignMetricsData)) {
+                document.getElementById('totalCampaigns').textContent = formatNumber(campaignMetricsData.length);
+            }
+        }
+
+        function renderSegmentStats() {
+            var prefData = getFilteredPreferenceData();
+            if (!prefData.length) return;
+            
+            // Get latest date
+            var latestDate = '';
+            prefData.forEach(function(item) {
+                if (item.logDate > latestDate) latestDate = item.logDate;
+            });
+            
+            var latestPrefs = prefData.filter(function(item) { return item.logDate === latestDate; });
+            
+            // Sum across all countries for the three segment preference types
+            var competitions = 0, offers = 0, newProducts = 0;
+            latestPrefs.forEach(function(item) {
+                if (item.preferenceType === 'Competitions_Giveaways') competitions += item.preferenceCount;
+                else if (item.preferenceType === 'Exclusive_Offers') offers += item.preferenceCount;
+                else if (item.preferenceType === 'New_Product_Launches') newProducts += item.preferenceCount;
+            });
+            
+            document.getElementById('segmentCompetitions').textContent = formatNumber(competitions);
+            document.getElementById('segmentOffers').textContent = formatNumber(offers);
+            document.getElementById('segmentNewProducts').textContent = formatNumber(newProducts);
+        }
+
+        function renderSubscriberCountryChart() {
+            var data = getFilteredSubscriberData();
+            if (!data.length) return;
+            
+            // Get latest date
+            var latestDate = '';
+            data.forEach(function(item) {
+                if (item.logDate > latestDate) latestDate = item.logDate;
+            });
+            
+            var latestData = data.filter(function(item) { return item.logDate === latestDate; });
+            latestData.sort(function(a, b) { return b.subscriberCount - a.subscriberCount; });
+            
+            var labels = latestData.map(function(d) { return d.countryCode; });
+            var values = latestData.map(function(d) { return d.subscriberCount; });
+            var colours = labels.map(function(_, i) { return COUNTRY_COLOURS[i % COUNTRY_COLOURS.length]; });
+            
+            var canvas = document.getElementById('subscriberCountryChart');
+            if (!canvas) return;
+            var ctx = canvas.getContext('2d');
+            
+            if (subscriberCountryChart) subscriberCountryChart.destroy();
+            
+            subscriberCountryChart = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        label: 'Subscribers',
+                        data: values,
+                        backgroundColor: colours,
+                        borderWidth: 0
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: { display: false },
+                        title: { display: false }
+                    },
+                    scales: {
+                        y: {
+                            beginAtZero: true,
+                            ticks: { callback: function(v) { return v.toLocaleString(); } }
+                        }
+                    }
+                }
+            });
+        }
+
+        function renderPreferenceDistribution() {
+            var prefData = getFilteredPreferenceData();
+            if (!prefData.length) return;
+            
+            // Get latest date
+            var latestDate = '';
+            prefData.forEach(function(item) {
+                if (item.logDate > latestDate) latestDate = item.logDate;
+            });
+            
+            var latestPrefs = prefData.filter(function(item) { return item.logDate === latestDate; });
+            
+            // Aggregate by preference type across all countries
+            var prefTotals = {};
+            latestPrefs.forEach(function(item) {
+                if (!prefTotals[item.preferenceType]) prefTotals[item.preferenceType] = 0;
+                prefTotals[item.preferenceType] += item.preferenceCount;
+            });
+            
+            var labels = [];
+            var values = [];
+            Object.keys(RYOBI_PREFERENCES).forEach(function(key) {
+                labels.push(RYOBI_PREFERENCES[key]);
+                values.push(prefTotals[key] || 0);
+            });
+            
+            // Render chart
+            var canvas = document.getElementById('preferenceDistributionChart');
+            if (!canvas) return;
+            var ctx = canvas.getContext('2d');
+            
+            if (preferenceDistributionChart) preferenceDistributionChart.destroy();
+            
+            preferenceDistributionChart = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        label: 'Subscribers',
+                        data: values,
+                        backgroundColor: RYOBI_GREEN,
+                        borderWidth: 0
+                    }]
+                },
+                options: {
+                    indexAxis: 'y',
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: { display: false }
+                    },
+                    scales: {
+                        x: {
+                            beginAtZero: true,
+                            ticks: { callback: function(v) { return v.toLocaleString(); } }
+                        }
+                    }
+                }
+            });
+            
+            // Render preference cards
+            var grid = document.getElementById('preferenceGrid');
+            if (!grid) return;
+            var fragment = document.createDocumentFragment();
+            
+            Object.keys(RYOBI_PREFERENCES).forEach(function(key) {
+                var card = document.createElement('div');
+                card.className = 'preference-card';
+                card.innerHTML = '<div class="preference-name">' + RYOBI_PREFERENCES[key] + '</div>' +
+                    '<div class="preference-count">' + formatNumber(prefTotals[key] || 0) + '</div>';
+                fragment.appendChild(card);
+            });
+            
+            grid.innerHTML = '';
+            grid.appendChild(fragment);
+        }
+
+        // ==================================================================================
+        // == EMAIL ANALYTICS TAB                                                          ==
+        // ==================================================================================
+        function renderEmailAnalytics() {
+            if (typeof monthlyMetricsData === 'undefined' || !Array.isArray(monthlyMetricsData) || !monthlyMetricsData.length) return;
+            
+            var data = monthlyMetricsData.slice();
+            data.sort(function(a, b) {
+                if (a.year !== b.year) return a.year - b.year;
+                return a.month - b.month;
+            });
+            
+            // Aggregate totals for KPI cards
+            var totals = {
+                sent: 0, delivered: 0, opens: 0, uniqueOpens: 0,
+                clicks: 0, uniqueClicks: 0, unsubs: 0, bounces: 0
+            };
+            
+            data.forEach(function(m) {
+                totals.sent += m.totalSent;
+                totals.delivered += m.totalDelivered;
+                totals.opens += m.totalOpens;
+                totals.uniqueOpens += m.totalOpenUnique;
+                totals.clicks += m.totalClicks;
+                totals.uniqueClicks += m.totalClickUnique;
+                totals.unsubs += m.totalUnsubscribedUnique;
+                totals.bounces += m.totalBouncedUnique;
+            });
+            
+            var deliveryRate = totals.sent > 0 ? (totals.delivered / totals.sent * 100) : 0;
+            var openRate = totals.delivered > 0 ? (totals.uniqueOpens / totals.delivered * 100) : 0;
+            var ctr = totals.delivered > 0 ? (totals.uniqueClicks / totals.delivered * 100) : 0;
+            var unsubRate = totals.delivered > 0 ? (totals.unsubs / totals.delivered * 100) : 0;
+            var bounceRate = totals.sent > 0 ? (totals.bounces / totals.sent * 100) : 0;
+            
+            // Update KPI cards
+            document.getElementById('emailTotalSent').textContent = formatNumber(totals.sent);
+            document.getElementById('emailTotalDelivered').textContent = formatNumber(totals.delivered);
+            document.getElementById('emailDeliveryRate').textContent = formatPct(deliveryRate);
+            document.getElementById('emailTotalOpens').textContent = formatNumber(totals.opens);
+            document.getElementById('emailUniqueOpens').textContent = formatNumber(totals.uniqueOpens);
+            document.getElementById('emailOpenRate').textContent = formatPct(openRate);
+            document.getElementById('emailTotalClicks').textContent = formatNumber(totals.clicks);
+            document.getElementById('emailUniqueClicks').textContent = formatNumber(totals.uniqueClicks);
+            document.getElementById('emailCTR').textContent = formatPct(ctr);
+            document.getElementById('emailTotalUnsubs').textContent = formatNumber(totals.unsubs);
+            document.getElementById('emailUnsubRate').textContent = formatPct(unsubRate);
+            document.getElementById('emailTotalBounces').textContent = formatNumber(totals.bounces);
+            document.getElementById('emailBounceRate').textContent = formatPct(bounceRate);
+            
+            // Period comparison (last month vs previous)
+            if (data.length >= 2) {
+                var current = data[data.length - 1];
+                var previous = data[data.length - 2];
+                renderDelta('emailTotalSentDelta', current.totalSent, previous.totalSent, false);
+                renderDelta('emailTotalDeliveredDelta', current.totalDelivered, previous.totalDelivered, false);
+                renderDelta('emailDeliveryRateDelta', current.deliveryRatePct, previous.deliveryRatePct, true);
+                renderDelta('emailTotalOpensDelta', current.totalOpens, previous.totalOpens, false);
+                renderDelta('emailUniqueOpensDelta', current.totalOpenUnique, previous.totalOpenUnique, false);
+                renderDelta('emailOpenRateDelta', current.openRatePct, previous.openRatePct, true);
+                renderDelta('emailTotalClicksDelta', current.totalClicks, previous.totalClicks, false);
+                renderDelta('emailUniqueClicksDelta', current.totalClickUnique, previous.totalClickUnique, false);
+                renderDelta('emailCTRDelta', current.clickThroughRatePct, previous.clickThroughRatePct, true);
+                renderDelta('emailTotalUnsubsDelta', current.totalUnsubscribedUnique, previous.totalUnsubscribedUnique, false, true);
+                renderDelta('emailUnsubRateDelta', current.unsubscribeRatePct, previous.unsubscribeRatePct, true, true);
+                renderDelta('emailTotalBouncesDelta', current.totalBouncedUnique, previous.totalBouncedUnique, false, true);
+                renderDelta('emailBounceRateDelta', current.bounceRatePct, previous.bounceRatePct, true, true);
+            }
+            
+            // Render table
+            renderEmailTable(data);
+            
+            // Render chart
+            renderEmailChart(data);
+        }
+
+        function renderDelta(elementId, current, previous, isPct, invertPositive) {
+            var el = document.getElementById(elementId);
+            if (!el) return;
+            if (previous === 0 && current === 0) { el.innerHTML = ''; return; }
+            
+            var diff = current - previous;
+            var pctChange = previous !== 0 ? ((diff / previous) * 100) : 0;
+            var isPositive = invertPositive ? diff <= 0 : diff >= 0;
+            var arrow = diff > 0 ? '&#9650;' : (diff < 0 ? '&#9660;' : '&#9644;');
+            var cssClass = diff === 0 ? 'neutral' : (isPositive ? 'positive' : 'negative');
+            
+            el.className = 'stat-comparison ' + cssClass;
+            el.innerHTML = '<span>' + arrow + '</span> ' + Math.abs(pctChange).toFixed(1) + '% vs prev';
+        }
+
+        function renderEmailTable(data) {
+            var tbody = document.getElementById('emailTableBody');
+            if (!tbody) return;
+            
+            var fragment = document.createDocumentFragment();
+            
+            // Show in reverse chronological order
+            for (var i = data.length - 1; i >= 0; i--) {
+                var m = data[i];
+                var tr = document.createElement('tr');
+                tr.innerHTML = 
+                    '<td><strong>' + getMonthName(m.month) + ' ' + m.year + '</strong></td>' +
+                    '<td>' + formatNumber(m.totalSent) + '</td>' +
+                    '<td>' + formatNumber(m.totalDelivered) + '</td>' +
+                    '<td>' + formatPct(m.deliveryRatePct) + '</td>' +
+                    '<td>' + formatNumber(m.totalOpens) + '</td>' +
+                    '<td>' + formatNumber(m.totalOpenUnique) + '</td>' +
+                    '<td>' + formatPct(m.openRatePct) + '</td>' +
+                    '<td>' + formatNumber(m.totalClicks) + '</td>' +
+                    '<td>' + formatNumber(m.totalClickUnique) + '</td>' +
+                    '<td>' + formatPct(m.clickThroughRatePct) + '</td>' +
+                    '<td>' + formatNumber(m.totalUnsubscribedUnique) + '</td>' +
+                    '<td>' + formatPct(m.unsubscribeRatePct) + '</td>' +
+                    '<td>' + formatNumber(m.totalBouncedUnique) + '</td>' +
+                    '<td>' + formatPct(m.bounceRatePct) + '</td>';
+                fragment.appendChild(tr);
+            }
+            
+            tbody.innerHTML = '';
+            tbody.appendChild(fragment);
+        }
+
+        function renderEmailChart(data) {
+            var canvas = document.getElementById('emailChart');
+            if (!canvas) return;
+            var ctx = canvas.getContext('2d');
+            
+            if (emailChart) emailChart.destroy();
+            
+            var labels = data.map(function(m) { return getMonthName(m.month) + ' ' + m.year; });
+            
+            emailChart = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: labels,
+                    datasets: [
+                        {
+                            label: 'Open Rate %',
+                            data: data.map(function(m) { return m.openRatePct; }),
+                            borderColor: RYOBI_GREEN,
+                            backgroundColor: 'rgba(120, 190, 32, 0.1)',
+                            tension: 0.3,
+                            fill: true
+                        },
+                        {
+                            label: 'CTR %',
+                            data: data.map(function(m) { return m.clickThroughRatePct; }),
+                            borderColor: '#2196F3',
+                            tension: 0.3,
+                            fill: false
+                        },
+                        {
+                            label: 'Unsub Rate %',
+                            data: data.map(function(m) { return m.unsubscribeRatePct; }),
+                            borderColor: '#E91E63',
+                            tension: 0.3,
+                            fill: false
+                        }
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: { position: 'top' }
+                    },
+                    scales: {
+                        y: {
+                            beginAtZero: true,
+                            ticks: { callback: function(v) { return v + '%'; } }
+                        }
+                    }
+                }
+            });
+        }
+
+        function setEmailPeriod(period, event) {
+            // Update active button state
+            document.querySelectorAll('.period-btn').forEach(function(btn) {
+                btn.classList.remove('active');
+            });
+            if (event && event.target) event.target.classList.add('active');
+            
+            // Re-render (currently showing all data - period filtering to be implemented with more data)
+            renderEmailAnalytics();
+        }
+
+        // ==================================================================================
+        // == CAMPAIGNS TAB                                                                ==
+        // ==================================================================================
+        function renderCampaignTable() {
+            if (typeof campaignMetricsData === 'undefined' || !Array.isArray(campaignMetricsData)) {
+                campaignFilteredData = [];
+            } else {
+                campaignFilteredData = campaignMetricsData.slice();
+            }
+            
+            filterCampaigns();
+        }
+
+        function filterCampaigns() {
+            if (typeof campaignMetricsData === 'undefined' || !Array.isArray(campaignMetricsData)) return;
+            
+            var searchVal = (document.getElementById('campaignSearchInput') || {}).value || '';
+            searchVal = searchVal.toLowerCase();
+            var startDate = (document.getElementById('campaignStartDate') || {}).value || '';
+            var endDate = (document.getElementById('campaignEndDate') || {}).value || '';
+            var hideTests = document.getElementById('hideTestSends') ? document.getElementById('hideTestSends').checked : true;
+            
+            campaignFilteredData = campaignMetricsData.filter(function(c) {
+                // Search filter
+                if (searchVal) {
+                    var nameMatch = (c.emailName || '').toLowerCase().indexOf(searchVal) !== -1;
+                    var subjectMatch = (c.emailSubject || '').toLowerCase().indexOf(searchVal) !== -1;
+                    var journeyMatch = (c.journeyName || '').toLowerCase().indexOf(searchVal) !== -1;
+                    if (!nameMatch && !subjectMatch && !journeyMatch) return false;
+                }
+                
+                // Date filter
+                if (startDate && c.sendDate < startDate) return false;
+                if (endDate && c.sendDate > endDate) return false;
+                
+                // Hide test sends
+                if (hideTests) {
+                    var name = (c.emailName || '').toLowerCase();
+                    if (name.indexOf('test') !== -1 || name.indexOf('draft') !== -1) return false;
+                    if (c.totalSent <= 1) return false;
+                }
+                
+                return true;
+            });
+            
+            // Sort
+            campaignFilteredData.sort(function(a, b) {
+                var aVal = a[campaignSortColumn];
+                var bVal = b[campaignSortColumn];
+                if (typeof aVal === 'string') aVal = aVal.toLowerCase();
+                if (typeof bVal === 'string') bVal = bVal.toLowerCase();
+                if (aVal < bVal) return campaignSortDirection === 'asc' ? -1 : 1;
+                if (aVal > bVal) return campaignSortDirection === 'asc' ? 1 : -1;
+                return 0;
+            });
+            
+            campaignCurrentPage = 1;
+            
+            // Update campaign count
+            var countEl = document.getElementById('campaignTotalCount');
+            if (countEl) countEl.textContent = formatNumber(campaignFilteredData.length);
+            
+            renderCampaignPage();
+            renderCampaignRankingChart();
+        }
+
+        function renderCampaignPage() {
+            var tbody = document.getElementById('campaignTableBody');
+            if (!tbody) return;
+            
+            var start = (campaignCurrentPage - 1) * campaignPageSize;
+            var end = Math.min(start + campaignPageSize, campaignFilteredData.length);
+            var pageData = campaignFilteredData.slice(start, end);
+            
+            var fragment = document.createDocumentFragment();
+            
+            pageData.forEach(function(c) {
+                var tr = document.createElement('tr');
+                tr.innerHTML = 
+                    '<td>' + formatDateOnly(c.sendDate) + '</td>' +
+                    '<td>' + (c.emailName || '-') + '</td>' +
+                    '<td>' + (c.emailSubject || '-') + '</td>' +
+                    '<td>' + (c.journeyName || '-') + '</td>' +
+                    '<td>' + formatNumber(c.totalSent) + '</td>' +
+                    '<td>' + formatPct(c.deliveryRate) + '</td>' +
+                    '<td>' + formatPct(c.openRate) + '</td>' +
+                    '<td>' + formatPct(c.clickRate) + '</td>' +
+                    '<td>' + formatPct(c.clickToOpenRate) + '</td>' +
+                    '<td>' + formatPct(c.bounceRate) + '</td>' +
+                    '<td>' + formatPct(c.unsubscribeRate) + '</td>';
+                fragment.appendChild(tr);
+            });
+            
+            tbody.innerHTML = '';
+            if (pageData.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="11" class="no-data">No campaigns found</td></tr>';
+            } else {
+                tbody.appendChild(fragment);
+            }
+            
+            // Update pagination
+            var totalPages = Math.ceil(campaignFilteredData.length / campaignPageSize);
+            var info = document.getElementById('campaignPaginationInfo');
+            if (info) info.textContent = 'Showing ' + (start + 1) + '-' + end + ' of ' + campaignFilteredData.length + ' campaigns';
+            
+            var prevBtn = document.getElementById('campaignPrevBtn');
+            var nextBtn = document.getElementById('campaignNextBtn');
+            if (prevBtn) prevBtn.disabled = campaignCurrentPage <= 1;
+            if (nextBtn) nextBtn.disabled = campaignCurrentPage >= totalPages;
+        }
+
+        function changeCampaignPage(delta) {
+            campaignCurrentPage += delta;
+            renderCampaignPage();
+        }
+
+        function sortCampaigns(column) {
+            if (campaignSortColumn === column) {
+                campaignSortDirection = campaignSortDirection === 'asc' ? 'desc' : 'asc';
+            } else {
+                campaignSortColumn = column;
+                campaignSortDirection = 'desc';
+            }
+            filterCampaigns();
+        }
+
+        function clearCampaignFilters() {
+            var searchEl = document.getElementById('campaignSearchInput');
+            var startEl = document.getElementById('campaignStartDate');
+            var endEl = document.getElementById('campaignEndDate');
+            if (searchEl) searchEl.value = '';
+            if (startEl) startEl.value = '';
+            if (endEl) endEl.value = '';
+            filterCampaigns();
+        }
+
+        // Campaign Ranking Chart
+        function renderCampaignRankingChart() {
+            if (!campaignFilteredData || !campaignFilteredData.length) return;
+            
+            var canvas = document.getElementById('campaignRankingChart');
+            if (!canvas) return;
+            var ctx = canvas.getContext('2d');
+            
+            if (campaignRankingChart) campaignRankingChart.destroy();
+            
+            // Get top 10 campaigns by the selected metric
+            var metric = campaignRankingView;
+            var sorted = campaignFilteredData.slice().filter(function(c) { return c.totalSent > 10; });
+            
+            // For unsubscribe rate, lower is better (sort ascending for "worst")
+            if (metric === 'unsubscribeRate') {
+                sorted.sort(function(a, b) { return b[metric] - a[metric]; });
+            } else {
+                sorted.sort(function(a, b) { return b[metric] - a[metric]; });
+            }
+            
+            var top10 = sorted.slice(0, 10);
+            
+            var labels = top10.map(function(c) {
+                var name = c.emailName || 'Unknown';
+                return name.length > 40 ? name.substring(0, 37) + '...' : name;
+            });
+            var values = top10.map(function(c) { return c[metric] || 0; });
+            
+            var barColour = metric === 'unsubscribeRate' ? '#E91E63' : (metric === 'clickRate' ? '#2196F3' : RYOBI_GREEN);
+            
+            campaignRankingChart = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        label: metric === 'openRate' ? 'Open Rate %' : (metric === 'clickRate' ? 'CTR %' : 'Unsub Rate %'),
+                        data: values,
+                        backgroundColor: barColour,
+                        borderWidth: 0
+                    }]
+                },
+                options: {
+                    indexAxis: 'y',
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: { display: false }
+                    },
+                    scales: {
+                        x: {
+                            beginAtZero: true,
+                            ticks: { callback: function(v) { return v + '%'; } }
+                        }
+                    }
+                }
+            });
+        }
+
+        function setRankingView(view, event) {
+            campaignRankingView = view;
+            document.querySelectorAll('#campaignDetailsSection .chart-toggle').forEach(function(btn) {
+                btn.classList.remove('active');
+            });
+            if (event && event.target) event.target.classList.add('active');
+            renderCampaignRankingChart();
+        }
+
+        // ==================================================================================
+        // == GROWTH TRENDS TAB                                                            ==
+        // ==================================================================================
+        function renderGrowthInsights() {
+            var data = getFilteredSubscriberData();
+            if (!data.length) return;
+            
+            // Get unique dates sorted
+            var dateMap = {};
+            data.forEach(function(item) {
+                if (!dateMap[item.logDate]) dateMap[item.logDate] = 0;
+                dateMap[item.logDate] += item.subscriberCount;
+            });
+            
+            var dates = Object.keys(dateMap).sort();
+            if (!dates.length) return;
+            
+            var currentTotal = dateMap[dates[dates.length - 1]];
+            var startTotal = dateMap[dates[0]];
+            var netChange = currentTotal - startTotal;
+            var growthRate = startTotal > 0 ? ((netChange / startTotal) * 100) : 0;
+            var dayCount = dates.length > 1 ? dates.length - 1 : 1;
+            var avgDaily = Math.round(netChange / dayCount);
+            
+            document.getElementById('growthCurrentTotal').textContent = formatNumber(currentTotal);
+            document.getElementById('growthNetChange').textContent = (netChange >= 0 ? '+' : '') + formatNumber(netChange);
+            document.getElementById('growthRate').textContent = growthRate.toFixed(1) + '%';
+            document.getElementById('growthAvgDaily').textContent = (avgDaily >= 0 ? '+' : '') + formatNumber(avgDaily);
+        }
+
+        function renderGrowthChart() {
+            var data = getFilteredSubscriberData();
+            if (!data.length) return;
+            
+            // Aggregate by date
+            var dateMap = {};
+            data.forEach(function(item) {
+                if (!dateMap[item.logDate]) dateMap[item.logDate] = 0;
+                dateMap[item.logDate] += item.subscriberCount;
+            });
+            
+            var dates = Object.keys(dateMap).sort();
+            var values = dates.map(function(d) { return dateMap[d]; });
+            var labels = dates.map(function(d) { return formatDateOnly(d); });
+            
+            var canvas = document.getElementById('growthChart');
+            if (!canvas) return;
+            var ctx = canvas.getContext('2d');
+            
+            if (growthChart) growthChart.destroy();
+            
+            growthChart = new Chart(ctx, {
+                type: chartType,
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        label: 'Total Subscribers',
+                        data: values,
+                        borderColor: RYOBI_GREEN,
+                        backgroundColor: chartType === 'line' ? 'rgba(120, 190, 32, 0.1)' : RYOBI_GREEN,
+                        tension: 0.3,
+                        fill: chartType === 'line'
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: { display: false }
+                    },
+                    scales: {
+                        y: {
+                            ticks: { callback: function(v) { return v.toLocaleString(); } }
+                        }
+                    }
+                }
+            });
+        }
+
+        function renderGrowthCountryChart() {
+            var data = getFilteredSubscriberData();
+            if (!data.length) return;
+            
+            // Group by country and date
+            var countryData = {};
+            var allDates = {};
+            data.forEach(function(item) {
+                if (!countryData[item.countryCode]) countryData[item.countryCode] = {};
+                countryData[item.countryCode][item.logDate] = item.subscriberCount;
+                allDates[item.logDate] = true;
+            });
+            
+            var dates = Object.keys(allDates).sort();
+            var labels = dates.map(function(d) { return formatDateOnly(d); });
+            
+            var datasets = [];
+            var countries = Object.keys(countryData).sort();
+            countries.forEach(function(cc, idx) {
+                datasets.push({
+                    label: cc,
+                    data: dates.map(function(d) { return countryData[cc][d] || 0; }),
+                    borderColor: COUNTRY_COLOURS[idx % COUNTRY_COLOURS.length],
+                    backgroundColor: 'transparent',
+                    tension: 0.3,
+                    borderWidth: 2,
+                    pointRadius: 0
+                });
+            });
+            
+            var canvas = document.getElementById('growthCountryChart');
+            if (!canvas) return;
+            var ctx = canvas.getContext('2d');
+            
+            if (growthCountryChart) growthCountryChart.destroy();
+            
+            growthCountryChart = new Chart(ctx, {
+                type: 'line',
+                data: { labels: labels, datasets: datasets },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: { position: 'right', labels: { boxWidth: 12, font: { size: 10 } } }
+                    },
+                    scales: {
+                        y: {
+                            ticks: { callback: function(v) { return v.toLocaleString(); } }
+                        }
+                    }
+                }
+            });
+        }
+
+        function renderPreferenceTrendChart() {
+            var prefData = getFilteredPreferenceData();
+            if (!prefData.length) return;
+            
+            // Aggregate by date and preference type (across all countries)
+            var prefByDate = {};
+            var allDates = {};
+            prefData.forEach(function(item) {
+                if (!prefByDate[item.preferenceType]) prefByDate[item.preferenceType] = {};
+                if (!prefByDate[item.preferenceType][item.logDate]) prefByDate[item.preferenceType][item.logDate] = 0;
+                prefByDate[item.preferenceType][item.logDate] += item.preferenceCount;
+                allDates[item.logDate] = true;
+            });
+            
+            var dates = Object.keys(allDates).sort();
+            var labels = dates.map(function(d) { return formatDateOnly(d); });
+            
+            var datasets = [];
+            var prefKeys = Object.keys(RYOBI_PREFERENCES);
+            prefKeys.forEach(function(key, idx) {
+                var data = dates.map(function(d) {
+                    return (prefByDate[key] && prefByDate[key][d]) ? prefByDate[key][d] : 0;
+                });
+                datasets.push({
+                    label: RYOBI_PREFERENCES[key],
+                    data: data,
+                    borderColor: COUNTRY_COLOURS[idx % COUNTRY_COLOURS.length],
+                    backgroundColor: 'transparent',
+                    tension: 0.3,
+                    borderWidth: 2,
+                    pointRadius: 0
+                });
+            });
+            
+            var canvas = document.getElementById('preferenceTrendChart');
+            if (!canvas) return;
+            var ctx = canvas.getContext('2d');
+            
+            if (preferenceTrendChart) preferenceTrendChart.destroy();
+            
+            preferenceTrendChart = new Chart(ctx, {
+                type: 'line',
+                data: { labels: labels, datasets: datasets },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: { position: 'right', labels: { boxWidth: 12, font: { size: 10 } } }
+                    },
+                    scales: {
+                        y: {
+                            beginAtZero: true,
+                            ticks: { callback: function(v) { return v.toLocaleString(); } }
+                        }
+                    }
+                }
+            });
+        }
+
+        function toggleChartType(type) {
+            chartType = type;
+            document.querySelectorAll('#growthChartSection .chart-toggle').forEach(function(btn) {
+                if (btn.textContent.toLowerCase().indexOf('line') !== -1) btn.classList.toggle('active', type === 'line');
+                if (btn.textContent.toLowerCase().indexOf('bar') !== -1) btn.classList.toggle('active', type === 'bar');
+            });
+            renderGrowthChart();
+        }
+
+        function toggleChartGrouping(grouping) {
+            chartGrouping = grouping;
+            document.querySelectorAll('#growthChartSection .chart-toggle').forEach(function(btn) {
+                if (btn.textContent.toLowerCase().indexOf('daily') !== -1) btn.classList.toggle('active', grouping === 'day');
+                if (btn.textContent.toLowerCase().indexOf('weekly') !== -1) btn.classList.toggle('active', grouping === 'week');
+                if (btn.textContent.toLowerCase().indexOf('monthly') !== -1) btn.classList.toggle('active', grouping === 'month');
+            });
+            renderGrowthChart();
+        }
+
+    </script>
+    
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js" defer></script>
+</body>
+</html>

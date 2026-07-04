@@ -1,0 +1,1037 @@
+<!DOCTYPE html>
+<html lang="en-GB">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RYOBI - Subscriber Analytics Dashboard</title>
+    
+    %%[
+    /* ===== MARKETING CLOUD USER AUTHENTICATION ===== */
+    /* This is the lightweight loader shell. It authenticates the user, then loads
+       the full dashboard inside an iframe while showing a skeleton loading UI.
+       
+       IMPORTANT: This page becomes the user-facing entry point URL.
+       The original dashboard CloudPage URL is loaded inside the iframe. */
+    
+    /* IMPORTANT: These must match the values in ryobi-subscriber-growth-dashboard.html */
+    SET @loaderURL = '' /* Full URL of THIS loader CloudPage - TO BE CONFIGURED */
+    SET @dashboardURL = '' /* Full URL of the dashboard CloudPage - TO BE CONFIGURED */
+    SET @baseURI = '' /* Your MC instance base URI - TO BE CONFIGURED */
+    SET @clientid = '' /* Client ID from your Installed Package - TO BE CONFIGURED */
+    SET @clientsecret = '' /* Client Secret from your Installed Package - TO BE CONFIGURED */
+    
+    /* Encryption settings - MUST match the dashboard page */
+    SET @ivector = '0123456789ABCDEF0123456789ABCDEF'
+    SET @salt = '0123456789ABCDEF'
+    SET @encrpswd = '0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF'
+    
+    /* Get authorization code from URL if present */
+    SET @code = RequestParameter('code')
+    
+    /* Check if session key is passed and decrypt it */
+    SET @passedencrsessionkey = RequestParameter('sessionkey')
+    SET @username = ""
+    SET @userAuthenticated = false
+    
+    IF NOT Empty(@passedencrsessionkey) THEN
+        SET @passedsessionkey = DecryptSymmetric(@passedencrsessionkey, 'AES', @null, @encrpswd, @null, @salt, @null, @ivector)
+    ENDIF
+    
+    /* Create new encrypted session key with 1 hour lifetime */
+    SET @newsessionkey = DateAdd(Now(), 1, "H")
+    SET @sessionkey = EncryptSymmetric(@newsessionkey, 'AES', @null, @encrpswd, @null, @salt, @null, @ivector)
+    
+    /* Check if passed session key is valid */
+    IF NOT Empty(@passedencrsessionkey) AND NOT Empty(@passedsessionkey) AND @passedsessionkey >= Now() AND @passedsessionkey <= @newsessionkey THEN
+        SET @userAuthenticated = true
+        SET @username = RequestParameter('u')
+        
+    ELSEIF NOT Empty(@code) THEN
+    ]%%
+    
+    <script runat="server">
+        Platform.Load("Core", "1.1.1");
+        
+        try {
+            var code = Platform.Variable.GetValue("@code");
+            var clientId = Variable.GetValue("@clientid");
+            var clientSecret = Variable.GetValue("@clientsecret");
+            var loaderURL = Variable.GetValue("@loaderURL");
+            var baseURI = Variable.GetValue("@baseURI");
+            
+            var payload = {
+                "grant_type": "authorization_code",
+                "code": code,
+                "client_id": clientId,
+                "client_secret": clientSecret,
+                "redirect_uri": loaderURL
+            };
+            
+            var OAuth2URL = 'https://' + baseURI + '.auth.marketingcloudapis.com/v2/token';
+            var contentType = 'application/json';
+            var checkCode = HTTP.Post(OAuth2URL, contentType, Stringify(payload));
+            
+            var tokenObj = Platform.Function.ParseJSON(checkCode["Response"][0]);
+            var accessToken = tokenObj.access_token;
+            
+            var headerNames = ["Authorization"];
+            var headerValues = ["Bearer " + accessToken];
+            var userInfoURL = 'https://' + baseURI + '.auth.marketingcloudapis.com/v2/userinfo';
+            var userinfo = HTTP.Get(userInfoURL, headerNames, headerValues);
+            var userinfojson = Platform.Function.ParseJSON(userinfo["Content"]);
+            
+            Variable.SetValue("@username", userinfojson.user.preferred_username || userinfojson.user.email || "User");
+            Variable.SetValue("@userAuthenticated", true);
+            
+        } catch(e) {
+    </script>
+    
+    %%[
+            SET @authURL = Concat('https://', @baseURI, '.auth.marketingcloudapis.com/v2/authorize?response_type=code&client_id=', @clientid, '&redirect_uri=', @loaderURL)
+            Redirect(@authURL)
+    ]%%
+    
+    <script runat="server">
+        }
+    </script>
+    
+    %%[
+    ELSE
+        SET @authURL = Concat('https://', @baseURI, '.auth.marketingcloudapis.com/v2/authorize?response_type=code&client_id=', @clientid, '&redirect_uri=', @loaderURL)
+        Redirect(@authURL)
+    ENDIF
+    
+    /* ===== BUILD DASHBOARD IFRAME URL ===== */
+    SET @requestedTab = RequestParameter('tab')
+    IF Empty(@requestedTab) THEN
+        SET @requestedTab = 'overview'
+    ENDIF
+    
+    /* URL-encode the session key and username for safe URL transport.
+       The session key is Base64 from EncryptSymmetric and can contain +, / and =
+       which are special characters in URLs (+  is decoded as space by the server,
+       causing DecryptSymmetric to fail with a 500 error on the dashboard page).
+       
+       NOTE: AMPscript URLEncode() does not reliably encode Base64 characters
+       (+, /, =) in all SFMC environments, so we use explicit Replace() calls. */
+    SET @encSessionKey = Replace(Replace(Replace(@sessionkey, '+', '%2B'), '/', '%2F'), '=', '%3D')
+    SET @encUsername = URLEncode(@username)
+    
+    SET @iframeSrc = Concat(@dashboardURL, '?tab=', @requestedTab, '&sessionkey=', @encSessionKey, '&u=', @encUsername)
+
+    /* Build a clean URL (without ?code=) so the browser never caches a spent auth code */
+    SET @cleanURL = Concat(@loaderURL, '?tab=', @requestedTab, '&sessionkey=', @encSessionKey, '&u=', @encUsername)
+    ]%%
+
+    <!-- Prevent browser from caching this page with a spent auth code -->
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+    <meta http-equiv="Pragma" content="no-cache">
+    <meta http-equiv="Expires" content="0">
+
+    <!-- Clean the URL: remove ?code= param so back/refresh doesn't replay a spent auth code -->
+    <script>
+        (function() {
+            var url = new URL(window.location.href);
+            if (url.searchParams.has('code')) {
+                var cleanURL = "%%=v(@cleanURL)=%%";
+                if (cleanURL) {
+                    try { history.replaceState(null, '', cleanURL); } catch(e) {}
+                } else {
+                    url.searchParams.delete('code');
+                    try { history.replaceState(null, '', url.toString()); } catch(e) {}
+                }
+            }
+        })();
+    </script>
+
+    <style>
+        /* ===== CSS RESET & VARIABLES ===== */
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        :root {
+            --ryobi-green: #78BE20;
+            --ryobi-dark-green: #5a9a10;
+            --ryobi-black: #1a1a1a;
+            --ryobi-dark-grey: #333333;
+            --ryobi-grey: #f8f8f8;
+            --ryobi-light-grey: #f2f2f2;
+            --ryobi-silver: #555555;
+            --ryobi-white: #ffffff;
+            --text: #333333;
+            --text-muted: #444444;
+            --border: #d1d1d1;
+        }
+
+        button, .btn, input, select {
+            border-radius: 0 !important;
+        }
+
+        body {
+            font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
+            background-color: var(--ryobi-light-grey);
+            color: var(--text);
+            min-height: 100vh;
+            line-height: 1.6;
+            overflow: hidden; /* Prevent double scrollbars - iframe handles scrolling */
+        }
+
+        /* ===== NAVBAR (matches dashboard exactly) ===== */
+        .navbar {
+            background-color: var(--ryobi-black);
+            padding: 0.8rem 1rem;
+            box-shadow: 0 2px 8px rgba(0,0,0,.15);
+            position: sticky;
+            top: 0;
+            z-index: 1000;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .navbar-brand {
+            color: #ffffff !important;
+            font-weight: 700;
+            text-decoration: none;
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+        }
+
+        .navbar-brand .ryobi-logo-text {
+            font-size: 1.8rem;
+            font-weight: 900;
+            color: var(--ryobi-green);
+        }
+
+        .navbar-brand strong {
+            color: var(--ryobi-green);
+        }
+
+        /* ===== TAB BAR (matches dashboard exactly) ===== */
+        .dashboard-tabs-container {
+            background: var(--ryobi-white);
+            margin: 0;
+            box-shadow: 0 2px 12px rgba(0,0,0,0.08);
+            overflow: hidden;
+        }
+
+        /* Global filters bar skeleton */
+        .global-filters-skeleton {
+            background: var(--ryobi-white);
+            border: 1px solid var(--border);
+            border-bottom: none;
+            padding: 1rem 1.5rem;
+            display: flex;
+            gap: 1.25rem;
+            align-items: flex-end;
+            flex-wrap: wrap;
+        }
+
+        .filter-skeleton-group {
+            display: flex;
+            flex-direction: column;
+            gap: 0.35rem;
+            flex: 1;
+            min-width: 150px;
+        }
+
+        .filter-skeleton-label {
+            height: 10px;
+            width: 60px;
+            background: rgba(120, 190, 32, 0.2);
+            border-radius: 2px;
+        }
+
+        .filter-skeleton-input {
+            height: 36px;
+            background: var(--ryobi-light-grey);
+            border: 1px solid var(--border);
+        }
+
+        .dashboard-tabs {
+            display: flex;
+            gap: 0;
+            background: var(--ryobi-white);
+            border-bottom: 3px solid var(--ryobi-green);
+            padding: 0;
+            overflow-x: auto;
+        }
+
+        .tab-btn {
+            padding: 1rem 1.5rem;
+            background: transparent;
+            border: none;
+            border-bottom: 3px solid transparent;
+            color: var(--text);
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            cursor: default;
+            position: relative;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            font-size: 0.85rem;
+            white-space: nowrap;
+            margin-bottom: -3px;
+        }
+
+        .tab-btn.active {
+            color: var(--ryobi-green);
+            border-bottom-color: var(--ryobi-green);
+            background: rgba(120, 190, 32, 0.08);
+        }
+
+        .tab-btn i {
+            font-size: 1.1rem;
+        }
+
+        /* Mobile tab dropdown */
+        .mobile-tab-dropdown {
+            display: none;
+            background: var(--ryobi-light-grey);
+            padding: 0.75rem 1rem;
+            border-bottom: 1px solid rgba(0,0,0,0.05);
+        }
+
+        .mobile-tab-dropdown select {
+            width: 100%;
+            padding: 0.75rem 1rem;
+            font-size: 0.9rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            background: var(--ryobi-white);
+            color: var(--text);
+            border: 1px solid var(--border);
+            cursor: default;
+            appearance: none;
+            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%2378BE20' d='M6 9L1 4h10z'/%3E%3C/svg%3E");
+            background-repeat: no-repeat;
+            background-position: right 1rem center;
+            padding-right: 2.5rem;
+        }
+
+        /* ===== SKELETON LOADING ANIMATIONS ===== */
+        @keyframes shimmer {
+            0% { background-position: 200% 0; }
+            100% { background-position: -200% 0; }
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; }
+            to { opacity: 1; }
+        }
+
+        .skeleton-pulse {
+            background: linear-gradient(90deg, #e8e8e8 25%, #d8d8d8 37%, #e8e8e8 63%);
+            background-size: 200% 100%;
+            animation: shimmer 1.5s ease-in-out infinite;
+        }
+
+        /* ===== SKELETON LAYOUT ===== */
+        .loader-container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding-left: 2rem;
+            padding-right: 2rem;
+            padding-top: 1.5rem;
+        }
+
+        .skeleton-container {
+            padding: 2rem 0;
+            animation: fadeIn 0.3s ease;
+        }
+
+        /* 4 KPI stat cards */
+        .skeleton-stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+            gap: 1.5rem;
+            margin-bottom: 2rem;
+        }
+
+        .skeleton-stat-card {
+            height: 90px;
+            border-left: 4px solid var(--ryobi-green);
+            background: var(--ryobi-white);
+            position: relative;
+            overflow: hidden;
+        }
+
+        .skeleton-stat-card .skeleton-pulse {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+        }
+
+        .skeleton-stat-card-content {
+            position: relative;
+            padding: 1.5rem;
+        }
+
+        .skeleton-stat-value {
+            height: 30px;
+            width: 60%;
+            margin-bottom: 0.75rem;
+        }
+
+        .skeleton-stat-label {
+            height: 14px;
+            width: 80%;
+        }
+
+        /* Section label skeleton */
+        .skeleton-section-label {
+            height: 20px;
+            width: 200px;
+            margin-bottom: 1rem;
+        }
+
+        /* 3 Segment/preference cards */
+        .skeleton-segment-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+            gap: 1.5rem;
+            margin-bottom: 2rem;
+        }
+
+        .skeleton-segment-card {
+            height: 80px;
+            border-left: 4px solid var(--ryobi-green);
+            background: var(--ryobi-white);
+            overflow: hidden;
+        }
+
+        /* Chart skeleton */
+        .skeleton-chart {
+            height: 300px;
+            background: var(--ryobi-white);
+            border: 1px solid var(--border);
+            margin-bottom: 2rem;
+            overflow: hidden;
+            position: relative;
+        }
+
+        .skeleton-chart-header {
+            height: 16px;
+            width: 250px;
+            margin: 1.5rem 1.5rem 1rem;
+        }
+
+        .skeleton-chart-area {
+            position: absolute;
+            bottom: 1.5rem;
+            left: 1.5rem;
+            right: 1.5rem;
+            top: 50px;
+        }
+
+        /* Table skeleton */
+        .skeleton-table {
+            background: var(--ryobi-white);
+            border: 1px solid var(--border);
+            overflow: hidden;
+        }
+
+        .skeleton-table-header {
+            height: 44px;
+            background: var(--ryobi-grey);
+            border-bottom: 2px solid var(--ryobi-green);
+        }
+
+        .skeleton-table-row {
+            height: 44px;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            align-items: center;
+            padding: 0 1rem;
+            gap: 2rem;
+        }
+
+        .skeleton-table-cell {
+            height: 14px;
+            flex: 1;
+        }
+
+        .skeleton-table-cell:first-child {
+            flex: 2;
+        }
+
+        /* ===== IFRAME ===== */
+        .dashboard-iframe-container {
+            display: none;
+            width: 100%;
+            height: calc(100vh - 68px);
+        }
+
+        .dashboard-iframe-container iframe {
+            width: 100%;
+            height: 100%;
+            border: none;
+        }
+
+        /* ===== LOADING STATE ===== */
+        .loader-shell {
+            transition: opacity 0.3s ease;
+        }
+
+        .loader-shell.hidden {
+            opacity: 0;
+            pointer-events: none;
+        }
+
+        /* ===== PROGRESS BAR ===== */
+        .loading-progress {
+            position: fixed;
+            top: 68px;
+            left: 0;
+            width: 100%;
+            height: 3px;
+            z-index: 999;
+            overflow: hidden;
+            background: rgba(120, 190, 32, 0.1);
+        }
+
+        .loading-progress-bar {
+            width: 30%;
+            height: 100%;
+            background: var(--ryobi-green);
+            animation: progressSlide 1.5s ease-in-out infinite;
+        }
+
+        @keyframes progressSlide {
+            0% { transform: translateX(-100%); }
+            50% { transform: translateX(200%); }
+            100% { transform: translateX(400%); }
+        }
+
+        /* ===== ERROR STATE ===== */
+        .error-state {
+            display: none;
+            text-align: center;
+            padding: 4rem 2rem;
+            max-width: 600px;
+            margin: 0 auto;
+        }
+
+        .error-state h3 {
+            color: var(--ryobi-green);
+            font-size: 1.25rem;
+            margin-bottom: 1rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        .error-state p {
+            color: var(--text-muted);
+            margin-bottom: 2rem;
+            font-size: 0.95rem;
+        }
+
+        .error-state button {
+            background: var(--ryobi-green);
+            color: white;
+            border: none;
+            padding: 0.75rem 2rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            cursor: pointer;
+            font-size: 0.85rem;
+        }
+
+        .error-state button:hover {
+            background: var(--ryobi-dark-green);
+        }
+
+        /* ===== RESPONSIVE ===== */
+        @media (max-width: 992px) {
+            .loader-container {
+                padding-left: 1rem;
+                padding-right: 1rem;
+            }
+
+            .dashboard-tabs {
+                overflow-x: auto;
+                -webkit-overflow-scrolling: touch;
+            }
+
+            .tab-btn {
+                flex-shrink: 0;
+                min-width: 120px;
+                font-size: 0.8rem;
+                padding: 0.875rem 1rem;
+            }
+        }
+
+        @media (max-width: 768px) {
+            .dashboard-tabs {
+                display: none !important;
+            }
+
+            .mobile-tab-dropdown {
+                display: block;
+            }
+
+            .skeleton-stats-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .skeleton-segment-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .global-filters-skeleton {
+                padding: 0.75rem 1rem;
+                gap: 0.75rem;
+                flex-direction: column;
+            }
+
+            .navbar {
+                padding: 0.6rem 0.75rem;
+            }
+
+            .navbar-brand {
+                gap: 0.5rem;
+                font-size: 0.85rem;
+            }
+
+            .navbar-text {
+                font-size: 0.75rem;
+                white-space: nowrap;
+                overflow: hidden;
+                text-overflow: ellipsis;
+                max-width: 150px;
+            }
+        }
+
+        @media (max-width: 575px) {
+            .navbar-brand strong {
+                display: none;
+            }
+
+            .navbar-text {
+                font-size: 0.7rem;
+                max-width: 120px;
+            }
+        }
+    </style>
+
+    <!-- Preconnect to CDNs: lets the browser resolve DNS + TLS while the iframe's SSJS processes server-side -->
+    <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
+    <link rel="preconnect" href="https://cdnjs.cloudflare.com" crossorigin>
+
+    <!-- Preload dashboard resources: downloaded into the browser cache now, so the iframe hits cache instead of network -->
+    <link rel="preload" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" as="style">
+    <link rel="preload" href="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/3.9.1/chart.min.js" as="script">
+    <link rel="preload" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js" as="script">
+
+    <!-- Bootstrap Icons for tab icons (also primes the jsdelivr connection) -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.5.0/font/bootstrap-icons.css">
+</head>
+<body>
+    <!-- ===== NAVBAR (matches dashboard exactly) ===== -->
+    <nav class="navbar">
+        <a class="navbar-brand" href="#">
+            <!-- TODO: Replace with actual RYOBI logo URL from SFMC Content Builder -->
+            <span class="ryobi-logo-text">RYOBI</span>
+            <strong>Subscriber Analytics Dashboard</strong>
+        </a>
+        <div class="navbar-nav ms-auto">
+            <span class="navbar-text" style="color: #ffffff;">
+                Logged in as: <strong>%%=v(@username)=%%</strong>
+            </span>
+        </div>
+    </nav>
+
+    <!-- ===== LOADING PROGRESS BAR ===== -->
+    <div class="loading-progress" id="loadingProgress">
+        <div class="loading-progress-bar"></div>
+    </div>
+
+    <!-- ===== LOADER SHELL (skeleton + tabs) ===== -->
+    <div class="loader-shell" id="loaderShell">
+        
+        <div class="loader-container">
+
+        <!-- Tab bar (visual only - not interactive during loading) -->
+        <div class="dashboard-tabs-container">
+            <!-- Global filters bar skeleton -->
+            <div class="global-filters-skeleton">
+                <div class="filter-skeleton-group">
+                    <div class="filter-skeleton-label"></div>
+                    <div class="filter-skeleton-input"></div>
+                </div>
+                <div class="filter-skeleton-group">
+                    <div class="filter-skeleton-label"></div>
+                    <div class="filter-skeleton-input"></div>
+                </div>
+                <div class="filter-skeleton-group">
+                    <div class="filter-skeleton-label"></div>
+                    <div class="filter-skeleton-input"></div>
+                </div>
+            </div>
+
+            <!-- Mobile dropdown (visible on mobile only) -->
+            <div class="mobile-tab-dropdown">
+                <select disabled aria-label="Loading dashboard">
+                    <option value="overview" %%[ IF @requestedTab == 'overview' THEN ]%% selected %%[ ENDIF ]%%>Overview</option>
+                    <option value="email" %%[ IF @requestedTab == 'email' THEN ]%% selected %%[ ENDIF ]%%>Email Analytics</option>
+                    <option value="campaigns" %%[ IF @requestedTab == 'campaigns' THEN ]%% selected %%[ ENDIF ]%%>Campaigns</option>
+                    <option value="growth" %%[ IF @requestedTab == 'growth' THEN ]%% selected %%[ ENDIF ]%%>Growth Trends</option>
+                    <option value="signups" %%[ IF @requestedTab == 'signups' THEN ]%% selected %%[ ENDIF ]%%>Signup Sources</option>
+                    <option value="myryobi" %%[ IF @requestedTab == 'myryobi' THEN ]%% selected %%[ ENDIF ]%%>MyRyobi</option>
+                    <option value="ga4" %%[ IF @requestedTab == 'ga4' THEN ]%% selected %%[ ENDIF ]%%>GA4 Analytics</option>
+                </select>
+            </div>
+
+            <!-- Desktop tab buttons -->
+            <nav class="dashboard-tabs">
+                <button class="tab-btn %%[ IF @requestedTab == 'overview' THEN ]%%active%%[ ENDIF ]%%" disabled>
+                    <i class="bi bi-speedometer2"></i> Overview
+                </button>
+                <button class="tab-btn %%[ IF @requestedTab == 'email' THEN ]%%active%%[ ENDIF ]%%" disabled>
+                    <i class="bi bi-envelope"></i> Email Analytics
+                </button>
+                <button class="tab-btn %%[ IF @requestedTab == 'campaigns' THEN ]%%active%%[ ENDIF ]%%" disabled>
+                    <i class="bi bi-megaphone"></i> Campaigns
+                </button>
+                <button class="tab-btn %%[ IF @requestedTab == 'growth' THEN ]%%active%%[ ENDIF ]%%" disabled>
+                    <i class="bi bi-graph-up"></i> Growth Trends
+                </button>
+                <button class="tab-btn %%[ IF @requestedTab == 'signups' THEN ]%%active%%[ ENDIF ]%%" disabled>
+                    <i class="bi bi-person-plus"></i> Signup Sources
+                </button>
+                <button class="tab-btn %%[ IF @requestedTab == 'myryobi' THEN ]%%active%%[ ENDIF ]%%" disabled>
+                    <i class="bi bi-person-gear"></i> MyRyobi
+                </button>
+                <button class="tab-btn %%[ IF @requestedTab == 'ga4' THEN ]%%active%%[ ENDIF ]%%" disabled>
+                    <i class="bi bi-bar-chart-line"></i> GA4 Analytics
+                </button>
+            </nav>
+        </div>
+
+        <!-- Skeleton content -->
+        <div class="skeleton-container">
+
+            <!-- 4 KPI Stat Cards -->
+            <div class="skeleton-stats-grid">
+                <div class="skeleton-stat-card">
+                    <div class="skeleton-pulse" style="position:absolute;top:0;left:0;width:100%;height:100%;"></div>
+                    <div class="skeleton-stat-card-content">
+                        <div class="skeleton-stat-value skeleton-pulse"></div>
+                        <div class="skeleton-stat-label skeleton-pulse"></div>
+                    </div>
+                </div>
+                <div class="skeleton-stat-card">
+                    <div class="skeleton-pulse" style="position:absolute;top:0;left:0;width:100%;height:100%;"></div>
+                    <div class="skeleton-stat-card-content">
+                        <div class="skeleton-stat-value skeleton-pulse" style="animation-delay:0.1s;"></div>
+                        <div class="skeleton-stat-label skeleton-pulse" style="animation-delay:0.1s;"></div>
+                    </div>
+                </div>
+                <div class="skeleton-stat-card">
+                    <div class="skeleton-pulse" style="position:absolute;top:0;left:0;width:100%;height:100%;"></div>
+                    <div class="skeleton-stat-card-content">
+                        <div class="skeleton-stat-value skeleton-pulse" style="animation-delay:0.2s;"></div>
+                        <div class="skeleton-stat-label skeleton-pulse" style="animation-delay:0.2s;"></div>
+                    </div>
+                </div>
+                <div class="skeleton-stat-card">
+                    <div class="skeleton-pulse" style="position:absolute;top:0;left:0;width:100%;height:100%;"></div>
+                    <div class="skeleton-stat-card-content">
+                        <div class="skeleton-stat-value skeleton-pulse" style="animation-delay:0.3s;"></div>
+                        <div class="skeleton-stat-label skeleton-pulse" style="animation-delay:0.3s;"></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Section label skeleton (Segment Subscriber Counts) -->
+            <div class="skeleton-section-label skeleton-pulse"></div>
+
+            <!-- 3 Segment cards -->
+            <div class="skeleton-segment-grid">
+                <div class="skeleton-segment-card"><div class="skeleton-pulse" style="width:100%;height:100%;"></div></div>
+                <div class="skeleton-segment-card"><div class="skeleton-pulse" style="width:100%;height:100%;animation-delay:0.05s;"></div></div>
+                <div class="skeleton-segment-card"><div class="skeleton-pulse" style="width:100%;height:100%;animation-delay:0.1s;"></div></div>
+            </div>
+
+            <!-- Chart skeleton -->
+            <div class="skeleton-chart">
+                <div class="skeleton-chart-header skeleton-pulse"></div>
+                <div class="skeleton-chart-area skeleton-pulse" style="opacity: 0.4;"></div>
+            </div>
+
+            <!-- Table skeleton -->
+            <div class="skeleton-table">
+                <div class="skeleton-table-header">
+                    <div class="skeleton-pulse" style="width:100%;height:100%;"></div>
+                </div>
+                <div class="skeleton-table-row">
+                    <div class="skeleton-table-cell skeleton-pulse"></div>
+                    <div class="skeleton-table-cell skeleton-pulse" style="animation-delay:0.05s;"></div>
+                    <div class="skeleton-table-cell skeleton-pulse" style="animation-delay:0.1s;"></div>
+                    <div class="skeleton-table-cell skeleton-pulse" style="animation-delay:0.15s;"></div>
+                    <div class="skeleton-table-cell skeleton-pulse" style="animation-delay:0.2s;"></div>
+                </div>
+                <div class="skeleton-table-row">
+                    <div class="skeleton-table-cell skeleton-pulse" style="animation-delay:0.05s;"></div>
+                    <div class="skeleton-table-cell skeleton-pulse" style="animation-delay:0.1s;"></div>
+                    <div class="skeleton-table-cell skeleton-pulse" style="animation-delay:0.15s;"></div>
+                    <div class="skeleton-table-cell skeleton-pulse" style="animation-delay:0.2s;"></div>
+                    <div class="skeleton-table-cell skeleton-pulse" style="animation-delay:0.25s;"></div>
+                </div>
+                <div class="skeleton-table-row">
+                    <div class="skeleton-table-cell skeleton-pulse" style="animation-delay:0.1s;"></div>
+                    <div class="skeleton-table-cell skeleton-pulse" style="animation-delay:0.15s;"></div>
+                    <div class="skeleton-table-cell skeleton-pulse" style="animation-delay:0.2s;"></div>
+                    <div class="skeleton-table-cell skeleton-pulse" style="animation-delay:0.25s;"></div>
+                    <div class="skeleton-table-cell skeleton-pulse" style="animation-delay:0.3s;"></div>
+                </div>
+                <div class="skeleton-table-row">
+                    <div class="skeleton-table-cell skeleton-pulse" style="animation-delay:0.15s;"></div>
+                    <div class="skeleton-table-cell skeleton-pulse" style="animation-delay:0.2s;"></div>
+                    <div class="skeleton-table-cell skeleton-pulse" style="animation-delay:0.25s;"></div>
+                    <div class="skeleton-table-cell skeleton-pulse" style="animation-delay:0.3s;"></div>
+                    <div class="skeleton-table-cell skeleton-pulse" style="animation-delay:0.35s;"></div>
+                </div>
+                <div class="skeleton-table-row">
+                    <div class="skeleton-table-cell skeleton-pulse" style="animation-delay:0.2s;"></div>
+                    <div class="skeleton-table-cell skeleton-pulse" style="animation-delay:0.25s;"></div>
+                    <div class="skeleton-table-cell skeleton-pulse" style="animation-delay:0.3s;"></div>
+                    <div class="skeleton-table-cell skeleton-pulse" style="animation-delay:0.35s;"></div>
+                    <div class="skeleton-table-cell skeleton-pulse" style="animation-delay:0.4s;"></div>
+                </div>
+            </div>
+
+            <!-- Error state (hidden by default) -->
+            <div class="error-state" id="errorState">
+                <h3>Unable to Load Dashboard</h3>
+                <p>The dashboard is taking longer than expected to load. This may be due to a temporary server issue.</p>
+                <button onclick="retryLoad()">Retry</button>
+            </div>
+        </div>
+
+        </div><!-- /.loader-container -->
+    </div>
+
+    <!-- ===== DASHBOARD IFRAME CONTAINER ===== -->
+    <div class="dashboard-iframe-container" id="iframeContainer">
+        <iframe id="dashboardFrame" 
+                src="%%=v(@iframeSrc)=%%" 
+                title="RYOBI Subscriber Analytics Dashboard"
+                data-tab="%%=v(@requestedTab)=%%"
+                allow="same-origin">
+        </iframe>
+    </div>
+
+    <!-- Expose server-side params for client-side URL building -->
+    <script>
+        var DASHBOARD_BASE_URL = "%%=v(@dashboardURL)=%%";
+        var SESSION_KEY = "%%=v(@encSessionKey)=%%";
+        var USERNAME = "%%=v(@encUsername)=%%";
+        var INITIAL_TAB = "%%=v(@requestedTab)=%%";
+    </script>
+
+    <script>
+        (function() {
+            // ===== CONFIGURATION =====
+            var LOAD_TIMEOUT_MS = 45000; // 45 second timeout before showing error
+            var SKELETON_FADE_MS = 300;  // Fade transition duration
+            
+            // ===== ELEMENT REFERENCES =====
+            var loaderShell = document.getElementById('loaderShell');
+            var iframeContainer = document.getElementById('iframeContainer');
+            var loadingProgress = document.getElementById('loadingProgress');
+            var errorState = document.getElementById('errorState');
+            var loadTimer = null;
+
+            // ===== IFRAME POOL: cache visited tabs to avoid reloading =====
+            var loadedTabs = {};    // tab name → iframe element
+            var activeTab = null;   // currently visible tab name
+            var pendingTab = null;  // tab name being loaded (waiting for iframe load event)
+
+            // Register the initial iframe that was rendered server-side
+            var initialFrame = document.getElementById('dashboardFrame');
+            pendingTab = INITIAL_TAB;
+
+            // ===== BUILD IFRAME URL FOR A TAB =====
+            function buildTabUrl(tab) {
+                return DASHBOARD_BASE_URL + '?tab=' + encodeURIComponent(tab) +
+                       '&sessionkey=' + SESSION_KEY +
+                       '&u=' + USERNAME;
+            }
+
+            // ===== CREATE A NEW IFRAME FOR A TAB =====
+            function createIframe(tab, url) {
+                var iframe = document.createElement('iframe');
+                iframe.src = url;
+                iframe.title = 'RYOBI Subscriber Analytics Dashboard';
+                iframe.setAttribute('allow', 'same-origin');
+                iframe.setAttribute('data-tab', tab);
+                iframe.style.display = 'none';
+                iframeContainer.appendChild(iframe);
+                return iframe;
+            }
+
+            // ===== SHOW A SPECIFIC IFRAME, HIDE ALL OTHERS =====
+            function showIframe(tab) {
+                var iframes = iframeContainer.querySelectorAll('iframe');
+                for (var i = 0; i < iframes.length; i++) {
+                    iframes[i].style.display = (iframes[i].getAttribute('data-tab') === tab) ? 'block' : 'none';
+                }
+                activeTab = tab;
+            }
+
+            // ===== SHOW DASHBOARD (hide skeleton, show iframe container) =====
+            function showDashboard() {
+                if (loadTimer) {
+                    clearTimeout(loadTimer);
+                    loadTimer = null;
+                }
+
+                if (pendingTab) {
+                    showIframe(pendingTab);
+                    pendingTab = null;
+                }
+
+                loaderShell.style.transition = 'opacity ' + SKELETON_FADE_MS + 'ms ease';
+                loaderShell.style.opacity = '0';
+                loadingProgress.style.display = 'none';
+
+                setTimeout(function() {
+                    loaderShell.style.display = 'none';
+                    iframeContainer.style.display = 'block';
+                }, SKELETON_FADE_MS);
+            }
+
+            // ===== SHOW SKELETON (for tab switches that need loading) =====
+            function showSkeleton() {
+                iframeContainer.style.display = 'none';
+                loaderShell.style.display = 'block';
+                loaderShell.style.opacity = '1';
+                loadingProgress.style.display = 'block';
+                errorState.style.display = 'none';
+
+                if (loadTimer) clearTimeout(loadTimer);
+                loadTimer = setTimeout(showError, LOAD_TIMEOUT_MS);
+            }
+
+            // ===== SHOW CACHED TAB INSTANTLY (no skeleton) =====
+            function showCachedTab(tab) {
+                if (loadTimer) {
+                    clearTimeout(loadTimer);
+                    loadTimer = null;
+                }
+                showIframe(tab);
+                loaderShell.style.display = 'none';
+                iframeContainer.style.display = 'block';
+            }
+
+            // ===== ERROR STATE =====
+            function showError() {
+                document.querySelector('.skeleton-container > .skeleton-stats-grid').style.display = 'none';
+                document.querySelector('.skeleton-container > .skeleton-section-label').style.display = 'none';
+                document.querySelector('.skeleton-container > .skeleton-segment-grid').style.display = 'none';
+                document.querySelector('.skeleton-container > .skeleton-chart').style.display = 'none';
+                document.querySelector('.skeleton-container > .skeleton-table').style.display = 'none';
+                loadingProgress.style.display = 'none';
+                errorState.style.display = 'block';
+            }
+
+            // ===== RETRY =====
+            window.retryLoad = function() {
+                document.querySelector('.skeleton-container > .skeleton-stats-grid').style.display = '';
+                document.querySelector('.skeleton-container > .skeleton-section-label').style.display = '';
+                document.querySelector('.skeleton-container > .skeleton-segment-grid').style.display = '';
+                document.querySelector('.skeleton-container > .skeleton-chart').style.display = '';
+                document.querySelector('.skeleton-container > .skeleton-table').style.display = '';
+                errorState.style.display = 'none';
+                loadingProgress.style.display = 'block';
+
+                var tabToRetry = pendingTab || activeTab || INITIAL_TAB;
+                var existingFrame = loadedTabs[tabToRetry];
+                if (existingFrame) {
+                    existingFrame.src = existingFrame.src;
+                } else {
+                    initialFrame.src = initialFrame.src;
+                }
+                loadTimer = setTimeout(showError, LOAD_TIMEOUT_MS);
+            };
+
+            // ===== UPDATE SKELETON TAB INDICATORS =====
+            function updateTabIndicators(newTab) {
+                var tabNames = ['overview', 'email', 'campaigns', 'growth', 'signups', 'myryobi', 'ga4'];
+                var buttons = document.querySelectorAll('.loader-shell .tab-btn');
+                buttons.forEach(function(btn, index) {
+                    var tabName = tabNames[index] || '';
+                    btn.classList.toggle('active', tabName === newTab);
+                });
+                var mobileSelect = document.querySelector('.loader-shell .mobile-tab-dropdown select');
+                if (mobileSelect) {
+                    mobileSelect.value = newTab;
+                }
+            }
+
+            // ===== UPDATE PARENT URL =====
+            function updateParentUrl(newTab) {
+                var url = new URL(window.location);
+                url.searchParams.set('tab', newTab);
+                try {
+                    history.replaceState({ tab: newTab }, '', url.toString());
+                } catch(e) {}
+            }
+
+            // ===== ATTACH LOAD HANDLER TO AN IFRAME =====
+            function attachLoadHandler(iframe, tab) {
+                iframe.addEventListener('load', function onLoad() {
+                    if (pendingTab === tab) {
+                        loadedTabs[tab] = iframe;
+                        requestAnimationFrame(function() {
+                            requestAnimationFrame(showDashboard);
+                        });
+                    }
+                });
+            }
+
+            // ===== INITIAL IFRAME SETUP =====
+            attachLoadHandler(initialFrame, INITIAL_TAB);
+
+            // ===== LISTEN FOR TAB SWITCH MESSAGES FROM DASHBOARD =====
+            window.addEventListener('message', function(event) {
+                if (event.data && event.data.type === 'tabSwitch') {
+                    var newTab = event.data.tab;
+
+                    updateTabIndicators(newTab);
+                    updateParentUrl(newTab);
+
+                    // Check if tab is already cached
+                    if (loadedTabs[newTab]) {
+                        showCachedTab(newTab);
+                        return;
+                    }
+
+                    // First visit to this tab — create new iframe and show skeleton
+                    var url = buildTabUrl(newTab);
+                    var frame = createIframe(newTab, url);
+                    pendingTab = newTab;
+                    attachLoadHandler(frame, newTab);
+                    showSkeleton();
+                }
+            });
+
+            // ===== START LOAD TIMEOUT FOR INITIAL TAB =====
+            loadTimer = setTimeout(showError, LOAD_TIMEOUT_MS);
+
+        })();
+    </script>
+</body>
+</html>

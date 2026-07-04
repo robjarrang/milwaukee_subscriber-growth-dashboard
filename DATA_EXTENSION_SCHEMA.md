@@ -422,7 +422,7 @@ BounceRatePct = (TotalBouncedUnique / TotalSent) × 100
 
 6. **Dashboard Deduplication:** The dashboard implements additional deduplication logic to handle cases where the same region code appears in multiple case variations (e.g., EN-GB vs en-GB).
 
-7. **Shared Data Extensions:** `SignupIdentifier_Performance_Milwaukee` is a Shared DE from the parent BU, accessed via `ENT.` prefix. WSProxy cannot query Shared DEs, so LookupRows is used instead.
+7. **Shared Data Extensions:** `SignupIdentifier_Performance_Milwaukee` is a Shared DE from the parent BU. For LookupRows, it is accessed via the `ENT.` prefix. WSProxy can also access Shared DEs by using their **CustomerKey (External Key)** instead of the DE name — e.g., `DataExtensionObject[C8B39EB9-5628-41FE-ADEB-D18772F6FBDF]`. The dashboard uses WSProxy with batched pagination as the primary retrieval method (to avoid the 2,000 row LookupRows cap), with LookupRows as a fallback.
 
 ---
 
