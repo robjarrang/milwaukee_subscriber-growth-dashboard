@@ -1,0 +1,2277 @@
+<!DOCTYPE html>
+<html lang="en-GB">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Milwaukee Power Tools - Subscriber Analytics Dashboard</title>
+    
+    <!-- Resource Hints for Performance -->
+    <link rel="dns-prefetch" href="//cdn.jsdelivr.net">
+    <link rel="dns-prefetch" href="//cdnjs.cloudflare.com">
+    <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
+    <link rel="preconnect" href="https://cdnjs.cloudflare.com" crossorigin>
+    
+    %%[
+    /* ===== MARKETING CLOUD USER AUTHENTICATION ===== */
+    
+    /* IMPORTANT: Update these variables with your Installed Package details */
+    SET @cloudpageURL = 'https://cloud.mail.milwaukeetool.eu/subscribergrowthloader' /* Full URL of this CloudPage */
+    SET @assetVersion = '20260706.1' /* Bump on every deploy of the CSS/JS Code Resources (cache-busting). MUST match the loader page. */
+    SET @baseURI = 'mcld0yjknlxks7nrt-k8rf2q7561' /* Your MC instance base URI (e.g., 'mcxxxxxxx') */
+    SET @clientid = 'idstm3usgxkk9l3a67ar7emc' /* Client ID from your Installed Package */
+    SET @clientsecret = 'WVt4Awgo5CKz12LETJVOIBg3' /* Client Secret from your Installed Package - ROTATE THIS: the previous value was shared in plain text */
+    
+    /* Encryption settings for session key - change these for security */
+    SET @ivector = 'A64C0019C3F5ECD74CB158970C064D07' /* 32 hex characters */
+    SET @salt = '497D2ED94FFB39AC' /* 16 hex characters */
+    SET @encrpswd = '87FAE9F59921ED400898B83987168D96A747BA62B9CDE582CC3D0C29CE65F9DB' /* 64 hex characters */
+    
+    /* Get authorization code from URL if present */
+    SET @code = RequestParameter('code')
+    
+    /* Check if session key is passed and decrypt it */
+    SET @passedencrsessionkey = RequestParameter('sessionkey')
+    SET @username = ""
+    SET @userAuthenticated = false
+    
+    IF NOT Empty(@passedencrsessionkey) THEN
+        SET @passedsessionkey = DecryptSymmetric(@passedencrsessionkey, 'AES', @null, @encrpswd, @null, @salt, @null, @ivector)
+    ENDIF
+    
+    /* Create new encrypted session key with 1 hour lifetime */
+    SET @newsessionkey = DateAdd(Now(), 1, "H")
+    SET @sessionkey = EncryptSymmetric(@newsessionkey, 'AES', @null, @encrpswd, @null, @salt, @null, @ivector)
+    
+    /* Check if passed session key is valid */
+    IF NOT Empty(@passedencrsessionkey) AND NOT Empty(@passedsessionkey) AND @passedsessionkey >= Now() AND @passedsessionkey <= @newsessionkey THEN
+        /* Valid session - continue loading page */
+        SET @userAuthenticated = true
+        SET @username = RequestParameter('u')
+        
+    /* Check if authorization code is available and validate it */
+    ELSEIF NOT Empty(@code) THEN
+    ]%%
+    
+    <script runat="server">
+        Platform.Load("Core", "1.1.1");
+        
+        try {
+            /* Get OAuth 2.0 access token using authorization code */
+            var code = Platform.Variable.GetValue("@code");
+            var clientId = Variable.GetValue("@clientid");
+            var clientSecret = Variable.GetValue("@clientsecret");
+            var cloudpageURL = Variable.GetValue("@cloudpageURL");
+            var baseURI = Variable.GetValue("@baseURI");
+            
+            var payload = {
+                "grant_type": "authorization_code",
+                "code": code,
+                "client_id": clientId,
+                "client_secret": clientSecret,
+                "redirect_uri": cloudpageURL
+            };
+            
+            var OAuth2URL = 'https://' + baseURI + '.auth.marketingcloudapis.com/v2/token';
+            var contentType = 'application/json';
+            var checkCode = HTTP.Post(OAuth2URL, contentType, Stringify(payload));
+            
+            /* Parse token response */
+            var tokenObj = Platform.Function.ParseJSON(checkCode["Response"][0]);
+            var accessToken = tokenObj.access_token;
+            
+            /* Get user information */
+            var headerNames = ["Authorization"];
+            var headerValues = ["Bearer " + accessToken];
+            var userInfoURL = 'https://' + baseURI + '.auth.marketingcloudapis.com/v2/userinfo';
+            var userinfo = HTTP.Get(userInfoURL, headerNames, headerValues);
+            var userinfojson = Platform.Function.ParseJSON(userinfo["Content"]);
+            
+            /* Set user information */
+            Variable.SetValue("@username", userinfojson.user.preferred_username || userinfojson.user.email || "User");
+            Variable.SetValue("@userAuthenticated", true);
+            
+        } catch(e) {
+            /* If code validation fails, redirect to auth server */
+    </script>
+    
+    %%[
+            /* Invalid code - redirect to authorization */
+            SET @authURL = Concat('https://', @baseURI, '.auth.marketingcloudapis.com/v2/authorize?response_type=code&client_id=', @clientid, '&redirect_uri=', @cloudpageURL)
+            Redirect(@authURL)
+    ]%%
+    
+    <script runat="server">
+        }
+    </script>
+    
+    %%[
+    ELSE
+        /* No valid session or code - redirect to authorization */
+        SET @authURL = Concat('https://', @baseURI, '.auth.marketingcloudapis.com/v2/authorize?response_type=code&client_id=', @clientid, '&redirect_uri=', @cloudpageURL)
+        /* If loaded inside the loader iframe, break out so auth page isn't shown in iframe */
+        Output('<script>if(window.top!==window){window.top.location.href="')
+        Output(v(@authURL))
+        Output('";}</script>')
+    ]%%
+    %%[
+        Redirect(@authURL)
+    ENDIF
+    
+    /* ===== DATA RETRIEVAL (only if authenticated) ===== */
+    ]%%
+    
+<script runat="server">
+    Platform.Load("core", "1.1.1");
+    
+    // Initialize variables for data storage
+    var dailySnapshotJSON = "[]";
+    var l1TradeJSON = "[]";
+    var regionalMetricsJSON = "[]";
+    var sendFactJSON = "[]";
+    var signupPerformanceJSON = "[]";
+    var signupIdentifierPerformanceJSON = "[]";
+    var pendingContactsJSON = "[]";
+    var myAccountSummaryJSON = "[]";
+    var myAccountRegionJSON = "[]";
+    var myAccountTradeJSON = "[]";
+    var signupSourceDetailJSON = "[]";
+    var signupSourceRegionalJSON = "[]";
+    var signupDetailSourceParam = "";
+    var sendFactLookbackDate = "";
+    var sendFactLookbackDays = 0;
+    var debugInfo = "";
+    var errorMessage = "";
+    var username = Variable.GetValue("@username") || "User";
+    var sessionkey = Variable.GetValue("@sessionkey") || "";
+    
+    // Get tab parameter to determine which data to load
+    // Valid values: overview, email, campaigns, growth, signups
+    // Default to 'overview' if not specified
+    var activeTab = Platform.Request.GetQueryStringParameter("tab") || "overview";
+    
+    // Note: Historical data sub-tabs have been removed for simplification
+    // The dashboard now only shows 7-day recent data
+    
+    // Only retrieve data if user is authenticated
+    if (Variable.GetValue("@userAuthenticated") == true) {
+        try {
+            var startTime = new Date().getTime();
+            debugInfo += "Loading data for tab: " + activeTab + ". ";
+            
+            // CONDITIONAL DATA LOADING BASED ON ACTIVE TAB
+            // This dramatically reduces load time by only querying what's needed
+            
+            if (activeTab == "overview") {
+                // Overview tab needs: Daily Snapshot + L1 Trade Snapshot + Pending Contacts
+                // Overview only shows the latest snapshot plus a short filterable window,
+                // so it defaults to 60 days (vs Growth's 200) - roughly a two-thirds cut
+                // in the inline JSON payload. Override via ?snapshotDays=N (capped at 300).
+                var snapshotLookbackDays = getSnapshotLookbackDays(60);
+                var dailySnapshotRecords = retrieveAudienceDailySnapshot(snapshotLookbackDays);
+                debugInfo += "Audience_Daily_Snapshot: " + dailySnapshotRecords.length + " records. ";
+                dailySnapshotJSON = dailySnapshotRecords.length > 0 ? Stringify(dailySnapshotRecords) : "[]";
+                
+                // Load L1 Trade data (7-day recent data only)
+                var l1TradeRecords = retrieveAudienceL1TradeSnapshot(false);
+                debugInfo += "L1_Trade: " + l1TradeRecords.length + " records (7-day). ";
+                l1TradeJSON = l1TradeRecords.length > 0 ? Stringify(l1TradeRecords) : "[]";
+                
+                // Load DOI Pending Contacts aggregated data
+                var pendingContactsRecords = retrieveDOIPendingContacts();
+                debugInfo += "DOI_Pending_Contacts: " + pendingContactsRecords.length + " records. ";
+                pendingContactsJSON = pendingContactsRecords.length > 0 ? Stringify(pendingContactsRecords) : "[]";
+                
+            } else if (activeTab == "email") {
+                // Email Analytics tab needs: Regional Monthly Metrics
+                var regionalMetricsRecords = retrieveRegionalMonthlyMetrics();
+                debugInfo += "Regional_Metrics: " + regionalMetricsRecords.length + " records. ";
+                regionalMetricsJSON = regionalMetricsRecords.length > 0 ? Stringify(regionalMetricsRecords) : "[]";
+                
+            } else if (activeTab == "campaigns") {
+                // Campaigns tab needs: Send_Fact data
+                // Server-side date filter keeps payload manageable and avoids the 10K cap.
+                // Override via ?campaignDays=N (capped at 730 / ~2 years).
+                var campaignLookbackDays = 90;
+                var campaignDaysParam = Platform.Request.GetQueryStringParameter("campaignDays");
+                if (campaignDaysParam) {
+                    var parsedDays = parseInt(campaignDaysParam, 10);
+                    if (!isNaN(parsedDays) && parsedDays > 0) {
+                        campaignLookbackDays = Math.min(parsedDays, 730);
+                    }
+                }
+                var sendFactRecords = retrieveSendFactData(campaignLookbackDays);
+                debugInfo += "Send_Fact: " + sendFactRecords.length + " records. ";
+                sendFactJSON = sendFactRecords.length > 0 ? Stringify(sendFactRecords) : "[]";
+                // Expose the actual server-side cutoff so the client can show an
+                // accurate warning only when the user's filter exceeds it.
+                var _cutoff = new Date();
+                _cutoff.setDate(_cutoff.getDate() - campaignLookbackDays);
+                var _pad = function (n) { return (n < 10 ? "0" : "") + n; };
+                sendFactLookbackDate = _cutoff.getFullYear() + "-" + _pad(_cutoff.getMonth() + 1) + "-" + _pad(_cutoff.getDate());
+                sendFactLookbackDays = campaignLookbackDays;
+                
+            } else if (activeTab == "growth") {
+                // Growth tab needs: Daily Snapshot + L1 Trade Snapshot
+                // Growth keeps the long 200-day window for trend charts. The server-side
+                // date filter keeps the payload under the 10K batch cap so the latest
+                // snapshot is always complete. Override via ?snapshotDays=N (capped at 300).
+                var snapshotLookbackDays = getSnapshotLookbackDays(200);
+                var dailySnapshotRecords = retrieveAudienceDailySnapshot(snapshotLookbackDays);
+                debugInfo += "Audience_Daily_Snapshot: " + dailySnapshotRecords.length + " records. ";
+                dailySnapshotJSON = dailySnapshotRecords.length > 0 ? Stringify(dailySnapshotRecords) : "[]";
+                
+                var l1TradeRecords = retrieveAudienceL1TradeSnapshot();
+                debugInfo += "L1_Trade: " + l1TradeRecords.length + " records. ";
+                l1TradeJSON = l1TradeRecords.length > 0 ? Stringify(l1TradeRecords) : "[]";
+                
+            } else if (activeTab == "signups") {
+                // Signups tab needs: Signup performance (lifetime engagement) +
+                // SignupIdentifier performance (Shared DE) for attributed new-subscriber counts.
+                var signupPerformanceRecords = retrieveSignupPerformanceData();
+                debugInfo += "Signup_Performance: " + signupPerformanceRecords.length + " records. ";
+                signupPerformanceJSON = signupPerformanceRecords.length > 0 ? Stringify(signupPerformanceRecords) : "[]";
+                
+                // Attributed new-subscriber counts (TotalUniqueNewContacts) per signup identifier.
+                var signupIdentifierRecords = retrieveSignupIdentifierPerformance();
+                debugInfo += "SignupIdentifier_Performance: " + signupIdentifierRecords.length + " records. ";
+                signupIdentifierPerformanceJSON = signupIdentifierRecords.length > 0 ? Stringify(signupIdentifierRecords) : "[]";
+                
+            } else if (activeTab == "signup-detail") {
+                // Signup detail sub-page: loads data for a single signup source identifier
+                var sourceParam = Platform.Request.GetQueryStringParameter("source") || "";
+                signupDetailSourceParam = sourceParam;
+                debugInfo += "SignupDetail source: " + sourceParam + ". ";
+                
+                if (sourceParam !== "") {
+                    // Retrieve lifetime metrics for this signup source
+                    var sourceDetailRecords = retrieveSignupSourceDetail(sourceParam);
+                    debugInfo += "SignupSourceDetail: " + sourceDetailRecords.length + " records. ";
+                    signupSourceDetailJSON = sourceDetailRecords.length > 0 ? Stringify(sourceDetailRecords) : "[]";
+                    
+                    // Retrieve regional breakdown for this signup source (from Shared DE)
+                    var sourceRegionalRecords = retrieveSignupSourceRegional(sourceParam);
+                    debugInfo += "SignupSourceRegional: " + sourceRegionalRecords.length + " records. ";
+                    signupSourceRegionalJSON = sourceRegionalRecords.length > 0 ? Stringify(sourceRegionalRecords) : "[]";
+                    
+                    // Load DOI Pending Contacts for regional breakdown display
+                    var pendingContactsRecords = retrieveDOIPendingContacts();
+                    debugInfo += "DOI_Pending_Contacts: " + pendingContactsRecords.length + " records. ";
+                    pendingContactsJSON = pendingContactsRecords.length > 0 ? Stringify(pendingContactsRecords) : "[]";
+                } else {
+                    debugInfo += "SignupDetail: No source parameter provided. ";
+                }
+                
+            } else if (activeTab == "myaccount") {
+                // MyAccount tab - Load from pre-aggregated Data Extensions built by
+                // MYACCOUNT_DASHBOARD_AGGREGATION_DAILY automation (Task 8).
+                // These are small aggregated DEs, not the raw 60k-row 'My Account' DE.
+                var myAccountSummaryRecords = retrieveMyAccountSummary();
+                debugInfo += "MyAccount_Daily_Summary: " + myAccountSummaryRecords.length + " records. ";
+                myAccountSummaryJSON = myAccountSummaryRecords.length > 0 ? Stringify(myAccountSummaryRecords) : "[]";
+
+                var myAccountRegionRecords = retrieveMyAccountRegionSummary();
+                debugInfo += "MyAccount_Daily_Region_Summary: " + myAccountRegionRecords.length + " records. ";
+                myAccountRegionJSON = myAccountRegionRecords.length > 0 ? Stringify(myAccountRegionRecords) : "[]";
+
+                var myAccountTradeRecords = retrieveMyAccountTradeSummary();
+                debugInfo += "MyAccount_Daily_Trade_Summary: " + myAccountTradeRecords.length + " records. ";
+                myAccountTradeJSON = myAccountTradeRecords.length > 0 ? Stringify(myAccountTradeRecords) : "[]";
+                
+            // Note: History sub-tab handling removed - dashboard now shows 7-day data only
+            }
+
+            var endTime = new Date().getTime();
+            var loadTime = ((endTime - startTime) / 1000).toFixed(2);
+            debugInfo += "Load time: " + loadTime + "s.";
+            
+        } catch (err) {
+            errorMessage = "Error: " + Stringify(err);
+            debugInfo += " ERROR occurred during data retrieval.";
+        }
+    }
+    
+    // ====================================================================================
+    // == DATA RETRIEVAL FUNCTIONS ====================================================== ==
+    // ====================================================================================
+
+    function formatDateValue(value) {
+        try {
+            if (!value) return "";
+            return Platform.Function.FormatDate(value, "iso");
+        } catch (e) {
+            return value || "";
+        }
+    }
+
+    function computeMonthsActive(firstDate, lastDate) {
+        try {
+            if (!firstDate || !lastDate) return 0;
+            var d1 = new Date(firstDate);
+            var d2 = new Date(lastDate);
+            if (isNaN(d1.getTime()) || isNaN(d2.getTime())) return 0;
+            var months = (d2.getFullYear() - d1.getFullYear()) * 12 + (d2.getMonth() - d1.getMonth()) + 1;
+            return months > 0 ? months : 0;
+        } catch (e) {
+            return 0;
+        }
+    }
+
+    function safeInteger(value) {
+        var parsed = parseInt(value, 10);
+        return isNaN(parsed) ? 0 : parsed;
+    }
+
+    function safeDecimal(value) {
+        var parsed = parseFloat(value);
+        return isNaN(parsed) ? 0 : parsed;
+    }
+
+    // Generic WSProxy row mapper (shared by the WSProxy-first retrieval functions).
+    // fieldMap maps DE field names to { key, type } specs; defaults seeds the
+    // output object so every consumer-facing key exists even when a field is
+    // missing from the result. Types: int, dec, pct100 (decimal / 100), date,
+    // upper (uppercased text), text. A per-field "fallback" replaces empty values.
+    function mapRow(result, fieldMap, defaults) {
+        var obj = {};
+        for (var d in defaults) { obj[d] = defaults[d]; }
+        for (var k = 0; k < result.Properties.length; k++) {
+            var prop = result.Properties[k];
+            var spec = fieldMap[prop.Name];
+            if (!spec) continue;
+            if (spec.type === "int")         obj[spec.key] = safeInteger(prop.Value);
+            else if (spec.type === "dec")    obj[spec.key] = safeDecimal(prop.Value);
+            else if (spec.type === "pct100") obj[spec.key] = safeDecimal(prop.Value) / 100.0;
+            else if (spec.type === "date")   obj[spec.key] = formatDateValue(prop.Value);
+            else if (spec.type === "upper")  obj[spec.key] = (prop.Value || "").toUpperCase();
+            else obj[spec.key] = prop.Value || (spec.fallback !== undefined ? spec.fallback : "");
+        }
+        return obj;
+    }
+
+    // Generic batched WSProxy retrieve. Returns raw Results arrays concatenated,
+    // following the ContinueRequest pagination pattern used throughout this page.
+    function wsProxyRetrieveAll(deName, cols, filter, maxBatches, debugLabel) {
+        var results = [];
+        var prox = new Script.Util.WSProxy();
+        var moreData = true;
+        var reqID = null;
+        var batchCount = 0;
+        var opts = { BatchSize: 2500 };
+        var props = {};
+        while (moreData && batchCount < maxBatches) {
+            moreData = false;
+            if (reqID) { props.ContinueRequest = reqID; }
+            var data = prox.retrieve("DataExtensionObject[" + deName + "]", cols, filter, opts, props);
+            if (data && data.Results) {
+                moreData = data.HasMoreRows;
+                reqID = data.RequestID;
+                batchCount++;
+                for (var j = 0; j < data.Results.length; j++) {
+                    results.push(data.Results[j]);
+                }
+            }
+        }
+        if (batchCount >= maxBatches && moreData && debugLabel) {
+            debugInfo += "WARNING: " + debugLabel + " truncated at " + (batchCount * 2500) + " records. ";
+        }
+        return results;
+    }
+
+
+    // Resolve the Daily Snapshot lookback window (in days).
+    // Each tab passes its own default: Overview's KPI cards and snapshot charts are
+    // driven by the LATEST snapshot, so it only needs enough history for its optional
+    // date filter (60 days). Growth keeps the long window (200 days) for trend charts,
+    // staying safely under the ~10,000-record batch cap (~40 regions/day).
+    // Override with ?snapshotDays=N (capped at 300 to stay under the batch limit).
+    function getSnapshotLookbackDays(defaultDays) {
+        var lookback = defaultDays || 200;
+        var param = Platform.Request.GetQueryStringParameter("snapshotDays");
+        if (param) {
+            var parsed = parseInt(param, 10);
+            if (!isNaN(parsed) && parsed > 0) {
+                lookback = Math.min(parsed, 300);
+            }
+        }
+        return lookback;
+    }
+
+    // Retrieve Audience Daily Snapshot data
+    // Using WSProxy with batching to get more than LookupRows limit.
+    // IMPORTANT: A server-side SnapshotDate filter (lookbackDays) keeps the payload
+    // well under the ~10,000-record batch cap. Without it, an unordered retrieve of the
+    // full history gets truncated mid-way through the most recent day, so the latest
+    // snapshot ends up with only a partial set of regions and the "total subscribers"
+    // callout under-reports dramatically. Passing a lookback guarantees the latest day
+    // is always fully retrieved.
+    function retrieveAudienceDailySnapshot(lookbackDays) {
+        var allRecords = [];
+        try {
+            var prox = new Script.Util.WSProxy();
+            // (PERFORMANCE OPTIMIZATION) Column set pruned to the fields the UI
+            // actually consumes. TotalWithL1/L2/NoTrade and InsertedDate were mapped
+            // into the client payload but never read by any renderer; dropping them
+            // shrinks both the SOAP retrieve and the inline JSON by ~45% per row.
+            var cols = ["SnapshotDate", "Region", "TotalSubscribers"];
+
+            // Build server-side date filter so we only pull the requested window.
+            var filter = null;
+            if (lookbackDays && lookbackDays > 0) {
+                var cutoff = new Date();
+                cutoff.setDate(cutoff.getDate() - lookbackDays);
+                var pad = function (n) { return (n < 10 ? "0" : "") + n; };
+                var cutoffStr = cutoff.getFullYear() + "-" + pad(cutoff.getMonth() + 1) + "-" + pad(cutoff.getDate()) + "T00:00:00";
+                filter = {
+                    Property: "SnapshotDate",
+                    SimpleOperator: "greaterThanOrEqual",
+                    Value: cutoffStr
+                };
+                debugInfo += "SnapshotDate filter >= " + cutoffStr + " (lookback " + lookbackDays + "d). ";
+            }
+
+            var moreData = true;
+            var reqID = null;
+            var batchCount = 0;
+            var maxBatches = 4; // Safety cap: ~10,000 records (4 batches x 2,500)
+            var opts = { BatchSize: 2500 };
+            var props = {};
+            
+            while (moreData && batchCount < maxBatches) {
+                moreData = false;
+                if (reqID) { props.ContinueRequest = reqID; }
+                var data = prox.retrieve("DataExtensionObject[Audience_Daily_Snapshot]", cols, filter, opts, props);
+                
+                if (data && data.Results) {
+                    moreData = data.HasMoreRows;
+                    reqID = data.RequestID;
+                    batchCount++;
+                    
+                    for (var j = 0; j < data.Results.length; j++) {
+                        var result = data.Results[j];
+                        var obj = {
+                            snapshotDate: "",
+                            region: "",
+                            totalSubscribers: 0
+                        };
+                        // Map properties more efficiently
+                        for (var k = 0; k < result.Properties.length; k++) {
+                            var prop = result.Properties[k];
+                            var propName = prop.Name;
+                            if (propName === "SnapshotDate") obj.snapshotDate = formatDateValue(prop.Value);
+                            else if (propName === "Region") obj.region = (prop.Value || "").toUpperCase();
+                            else if (propName === "TotalSubscribers") obj.totalSubscribers = safeInteger(prop.Value);
+                        }
+                        allRecords.push(obj);
+                    }
+                }
+            }
+        } catch (e) {
+            // Silently fail and return empty array
+            debugInfo += "Error in retrieveAudienceDailySnapshot: " + Stringify(e) + ". ";
+        }
+        return allRecords;
+    }
+
+    // Retrieve Audience L1 Trade Snapshot data using WSProxy with getNextBatch() pagination
+    // This allows retrieving more than 2500 records by following the pagination pattern
+    // Reference: https://ampscript.xyz/how-tos/how-to-retrieve-more-than-2500-records-from-a-data-extension-with-server-side-javascript/
+    // 
+    // loadFullHistory parameter:
+    // - true: Load ALL records using pagination (no date filter, no batch limit)
+    // - false: Load only last 7 days with limited batches (fast loading for current view)
+    // regionFilter parameter (optional):
+    // - Array of region codes to filter by (e.g., ['DE-DE', 'DE-CH', 'DE-AT'])
+    // - If null/undefined, returns all regions
+    function retrieveAudienceL1TradeSnapshot(loadFullHistory, regionFilter) {
+        var allRecords = [];
+        try {
+            var prox = new Script.Util.WSProxy();
+            // (PERFORMANCE OPTIMIZATION) InsertedDate pruned - never read by the UI.
+            var cols = ["SnapshotDate", "Region", "L1Trade", "SubscriberCount"];
+            var moreData = true;
+            var reqID = null;
+            var batchCount = 0;
+            
+            // Configure based on loading mode
+            var filter = null;
+            var maxBatches = loadFullHistory ? 100 : 3; // Full history: up to 250,000 records; Current: ~7,500 records
+            
+            if (!loadFullHistory) {
+                // CURRENT SNAPSHOT MODE: Load only last 7 days for fast loading
+                var sevenDaysAgo = new Date();
+                sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+                var year = sevenDaysAgo.getFullYear();
+                var month = sevenDaysAgo.getMonth() + 1;
+                var day = sevenDaysAgo.getDate();
+                var monthStr = month < 10 ? '0' + month : '' + month;
+                var dayStr = day < 10 ? '0' + day : '' + day;
+                var filterDate = year + '-' + monthStr + '-' + dayStr;
+                
+                filter = {
+                    Property: "SnapshotDate",
+                    SimpleOperator: "greaterThanOrEqual",
+                    Value: filterDate
+                };
+            }
+            // FULL HISTORY MODE: No date filter - retrieve all records using pagination
+            
+            // Create a lookup object for region filter (faster than array.indexOf)
+            var regionLookup = null;
+            if (regionFilter && regionFilter.length > 0) {
+                regionLookup = {};
+                for (var r = 0; r < regionFilter.length; r++) {
+                    regionLookup[regionFilter[r].toUpperCase()] = true;
+                }
+            }
+            
+            var opts = { BatchSize: 2500 };
+            var props = {};
+            
+            while (moreData && batchCount < maxBatches) {
+                moreData = false;
+                if (reqID) { props.ContinueRequest = reqID; }
+                var data = prox.retrieve("DataExtensionObject[Audience_L1_Trade_Snapshot]", cols, filter, opts, props);
+                
+                if (data && data.Results) {
+                    moreData = data.HasMoreRows;
+                    reqID = data.RequestID;
+                    batchCount++;
+                    
+                    for (var j = 0; j < data.Results.length; j++) {
+                        var result = data.Results[j];
+                        var obj = {
+                            snapshotDate: "",
+                            region: "",
+                            l1Trade: "",
+                            subscriberCount: 0
+                        };
+                        for (var k = 0; k < result.Properties.length; k++) {
+                            var prop = result.Properties[k];
+                            switch (prop.Name) {
+                                case "SnapshotDate":
+                                    obj.snapshotDate = formatDateValue(prop.Value);
+                                    break;
+                                case "Region":
+                                    obj.region = (prop.Value || "").toUpperCase();
+                                    break;
+                                case "L1Trade":
+                                    obj.l1Trade = prop.Value || "";
+                                    break;
+                                case "SubscriberCount":
+                                    obj.subscriberCount = safeInteger(prop.Value);
+                                    break;
+                            }
+                        }
+                        // Apply region filter if specified
+                        if (regionLookup) {
+                            if (regionLookup[obj.region]) {
+                                allRecords.push(obj);
+                            }
+                        } else {
+                            allRecords.push(obj);
+                        }
+                    }
+                }
+            }
+        } catch (e) {
+            debugInfo += "Error in retrieveAudienceL1TradeSnapshot: " + Stringify(e) + ". ";
+        }
+        return allRecords;
+    }
+
+    // Note: retrieveAudienceL2TradeSnapshot() function removed - L2 data not displayed in UI
+
+    // Retrieve Regional Monthly Metrics data
+    function retrieveRegionalMonthlyMetrics() {
+        // (J1) WSProxy-first rewrite. The previous LookupRows(de, "", "") probe had
+        // two problems: LookupRows silently caps at 2,000 rows without throwing (so
+        // the WSProxy fallback in the catch never fired on truncation - at ~40
+        // regions x 12 months the Email tab would quietly drop the oldest months
+        // within ~4 years of history), and it probed TWO candidate DE names on
+        // every load. The Final_DE migration is done, so this now retrieves it
+        // directly with proper batching.
+        var allRecords = [];
+        try {
+            var cols = ["YearNumber", "MonthNumber", "Region", "TotalSent", "TotalBouncedUnique", "TotalDelivered", "TotalOpenUnique", "TotalClickUnique", "TotalUnsubscribedUnique", "DeliveryRatePct", "OpenRatePct", "ClickThroughRatePct", "ClickToOpenRatePct", "UnsubscribeRatePct", "TotalOpens", "TotalClicks", "BounceRatePct"];
+            var fieldMap = {
+                "YearNumber":              { key: "year", type: "int" },
+                "MonthNumber":             { key: "month", type: "int" },
+                "Region":                  { key: "region", type: "upper" },
+                "TotalSent":               { key: "totalSent", type: "int" },
+                "TotalDelivered":          { key: "totalDelivered", type: "int" },
+                "DeliveryRatePct":         { key: "deliveryRate", type: "pct100" },
+                "TotalBouncedUnique":      { key: "totalBounced", type: "int" },
+                "BounceRatePct":           { key: "bounceRate", type: "pct100" },
+                "TotalOpenUnique":         { key: "totalUniqueOpens", type: "int" },
+                "TotalOpens":              { key: "totalOpens", type: "int" },
+                "OpenRatePct":             { key: "openRate", type: "pct100" },
+                "TotalClickUnique":        { key: "totalUniqueClicks", type: "int" },
+                "TotalClicks":             { key: "totalClicks", type: "int" },
+                "ClickThroughRatePct":     { key: "ctr", type: "pct100" },
+                "ClickToOpenRatePct":      { key: "ctor", type: "pct100" },
+                "TotalUnsubscribedUnique": { key: "totalUnsubscribes", type: "int" },
+                "UnsubscribeRatePct":      { key: "unsubscribeRate", type: "pct100" }
+            };
+            var defaults = {
+                year: 0, month: 0, region: "", totalSent: 0, totalDelivered: 0,
+                deliveryRate: 0, totalBounced: 0, bounceRate: 0,
+                totalComplaints: 0, complaintRate: 0,
+                totalUniqueOpens: 0, totalOpens: 0, openRate: 0,
+                totalUniqueClicks: 0, totalClicks: 0, ctr: 0, ctor: 0,
+                totalUnsubscribes: 0, unsubscribeRate: 0, insertedDate: ""
+            };
+            var results = wsProxyRetrieveAll("Regional_Monthly_Metrics_Final_DE", cols, null, 4, "Regional_Monthly_Metrics_Final_DE");
+            for (var j = 0; j < results.length; j++) {
+                allRecords.push(mapRow(results[j], fieldMap, defaults));
+            }
+            debugInfo += "Regional_Metrics via WSProxy: " + allRecords.length + " records. ";
+        } catch (e) {
+            debugInfo += "Error in retrieveRegionalMonthlyMetrics: " + Stringify(e) + ". ";
+            allRecords = [];
+        }
+        return allRecords;
+    }
+
+    // Retrieve Send Fact data with batching support
+    // OPTIMIZED: Removed LookupRows attempt. Directly using WSProxy for performance and scalability.
+    // Accepts an optional lookbackDays parameter so retrieval is scoped server-side via a
+    // SentDateTime SimpleFilterPart. This keeps payload small and avoids the 10K row cap
+    // for normal date ranges.
+    function retrieveSendFactData(lookbackDays) {
+        var allRecords = [];
+        var hitLimit = false;
+        
+        try {
+            debugInfo += "Method: WSProxy batching. ";
+            
+            var prox = new Script.Util.WSProxy();
+            // Reduced columns to minimize payload size
+            var cols = ["JobID", "CampaignID", "SentDateTime", "CampaignName", "SubjectLine", "Market", "UserCulture", "TotalSent", "TotalDelivered", "DeliveryRate", "TotalBounced", "BounceRate", "TotalUniqueOpens", "OpenRate", "TotalUniqueClicks", "CTR", "CTOR", "TotalUnsubscribes", "UnsubscribeRate"];
+            
+            // Build server-side date filter so we only pull the requested window.
+            var filter = null;
+            if (lookbackDays && lookbackDays > 0) {
+                var cutoff = new Date();
+                cutoff.setDate(cutoff.getDate() - lookbackDays);
+                // Format as YYYY-MM-DDTHH:mm:ss (SFMC-friendly ISO without timezone)
+                var pad = function (n) { return (n < 10 ? "0" : "") + n; };
+                var cutoffStr = cutoff.getFullYear() + "-" + pad(cutoff.getMonth() + 1) + "-" + pad(cutoff.getDate()) + "T00:00:00";
+                filter = {
+                    Property: "SentDateTime",
+                    SimpleOperator: "greaterThanOrEqual",
+                    Value: cutoffStr
+                };
+                debugInfo += "SentDateTime filter >= " + cutoffStr + " (lookback " + lookbackDays + "d). ";
+            }
+            
+            var moreData = true;
+            var reqID = null;
+            var batchCount = 0;
+            var maxBatches = 4; // Safety cap: ~10,000 records (4 batches x 2,500)
+            var opts = { BatchSize: 2500 };
+            var props = {};
+            
+            while (moreData && batchCount < maxBatches) {
+                if (reqID) { props.ContinueRequest = reqID; }
+                var data = prox.retrieve("DataExtensionObject[Send_Fact]", cols, filter, opts, props);
+                
+                if (data && data.Results && data.Results.length > 0) {
+                    for (var j = 0; j < data.Results.length; j++) {
+                        var result = data.Results[j];
+                        var obj = {
+                            jobId: 0,
+                            campaignId: "",
+                            sentDateTime: "",
+                            campaignName: "",
+                            subjectLine: "",
+                            market: "",
+                            userCulture: "",
+                            totalSent: 0,
+                            totalDelivered: 0,
+                            deliveryRate: 0,
+                            totalBounced: 0,
+                            bounceRate: 0,
+                            totalUniqueOpens: 0,
+                            openRate: 0,
+                            totalUniqueClicks: 0,
+                            ctr: 0,
+                            ctor: 0,
+                            totalUnsubscribes: 0,
+                            unsubscribeRate: 0
+                        };
+                        for (var k = 0; k < result.Properties.length; k++) {
+                            var prop = result.Properties[k];
+                            switch (prop.Name) {
+                                case "JobID":
+                                    obj.jobId = safeInteger(prop.Value);
+                                    break;
+                                case "CampaignID":
+                                    obj.campaignId = prop.Value || "";
+                                    break;
+                                case "SentDateTime":
+                                    obj.sentDateTime = formatDateValue(prop.Value);
+                                    break;
+                                case "CampaignName":
+                                    obj.campaignName = prop.Value || "";
+                                    break;
+                                case "SubjectLine":
+                                    obj.subjectLine = prop.Value || "";
+                                    break;
+                                case "Market":
+                                    obj.market = prop.Value || "";
+                                    break;
+                                case "UserCulture":
+                                    obj.userCulture = (prop.Value || "").toUpperCase();
+                                    break;
+                                case "TotalSent":
+                                    obj.totalSent = safeInteger(prop.Value);
+                                    break;
+                                case "TotalDelivered":
+                                    obj.totalDelivered = safeInteger(prop.Value);
+                                    break;
+                                case "DeliveryRate":
+                                    obj.deliveryRate = safeDecimal(prop.Value);
+                                    break;
+                                case "TotalBounced":
+                                    obj.totalBounced = safeInteger(prop.Value);
+                                    break;
+                                case "BounceRate":
+                                    obj.bounceRate = safeDecimal(prop.Value);
+                                    break;
+                                case "TotalUniqueOpens":
+                                    obj.totalUniqueOpens = safeInteger(prop.Value);
+                                    break;
+                                case "OpenRate":
+                                    obj.openRate = safeDecimal(prop.Value);
+                                    break;
+                                case "TotalUniqueClicks":
+                                    obj.totalUniqueClicks = safeInteger(prop.Value);
+                                    break;
+                                case "CTR":
+                                    obj.ctr = safeDecimal(prop.Value);
+                                    break;
+                                case "CTOR":
+                                    obj.ctor = safeDecimal(prop.Value);
+                                    break;
+                                case "TotalUnsubscribes":
+                                    obj.totalUnsubscribes = safeInteger(prop.Value);
+                                    break;
+                                case "UnsubscribeRate":
+                                    obj.unsubscribeRate = safeDecimal(prop.Value);
+                                    break;
+                            }
+                        }
+                        allRecords.push(obj);
+                    }
+                    
+                    // Check if there's more data
+                    if (data.HasMoreRows) {
+                        reqID = data.RequestID;
+                        batchCount++;
+                        debugInfo += "Batch " + batchCount + " (" + data.Results.length + " records). ";
+                    } else {
+                        moreData = false;
+                        debugInfo += "Final batch (" + data.Results.length + " records). ";
+                    }
+                } else {
+                    moreData = false;
+                }
+            }
+            
+            // Track if we hit the limit
+            if (batchCount >= maxBatches) {
+                hitLimit = true;
+                debugInfo += "⚠️ Hit max batches (10K limit). ";
+            }
+            
+            if (allRecords.length > 0) {
+                debugInfo += "Total: " + allRecords.length + " campaigns via WSProxy. ";
+            }
+            
+        } catch (e2) {
+            // If WSProxy also fails, return what we have
+            debugInfo += "WSProxy error: " + e2.message + ". ";
+        }
+        
+        return allRecords;
+    }
+
+    // Retrieve Signup Identifier Performance data
+    function retrieveSignupPerformanceData() {
+        // (J1) WSProxy-first rewrite - promoted from the previous catch-block
+        // fallback. LookupRows caps at 2,000 rows without throwing, so the old
+        // fallback never fired on silent truncation as signup identifiers grow.
+        var allRecords = [];
+        try {
+            var cols = ["SignupIdentifier", "ConsentStatus", "OriginalCaptureSource", "LatestCaptureSource",
+                       "TotalLifetimeSends", "TotalLifetimeDelivered", "TotalLifetimeBounced",
+                       "TotalLifetimeOpens", "TotalLifetimeClicks", "TotalLifetimeUnsubscribes",
+                       "TotalLifetimeComplaints", "LifetimeAvgDeliveryRate", "LifetimeAvgBounceRate",
+                       "LifetimeAvgOpenRate", "LifetimeAvgCTR", "LifetimeAvgCTOR",
+                       "LifetimeAvgUnsubscribeRate", "LifetimeAvgComplaintRate", "FirstActivityMonth",
+                       "LastActivityMonth", "InsertedDate", "ModifiedDate"];
+            var fieldMap = {
+                "SignupIdentifier":           { key: "signupIdentifier", type: "text" },
+                "ConsentStatus":              { key: "consentStatus", type: "text" },
+                "OriginalCaptureSource":      { key: "originalCaptureSource", type: "text" },
+                "LatestCaptureSource":        { key: "latestCaptureSource", type: "text" },
+                "TotalLifetimeSends":         { key: "totalLifetimeSends", type: "int" },
+                "TotalLifetimeDelivered":     { key: "totalLifetimeDelivered", type: "int" },
+                "TotalLifetimeBounced":       { key: "totalLifetimeBounced", type: "int" },
+                "TotalLifetimeOpens":         { key: "totalLifetimeOpens", type: "int" },
+                "TotalLifetimeClicks":        { key: "totalLifetimeClicks", type: "int" },
+                "TotalLifetimeUnsubscribes":  { key: "totalLifetimeUnsubscribes", type: "int" },
+                "TotalLifetimeComplaints":    { key: "totalLifetimeComplaints", type: "int" },
+                "LifetimeAvgDeliveryRate":    { key: "lifetimeAvgDeliveryRate", type: "dec" },
+                "LifetimeAvgBounceRate":      { key: "lifetimeAvgBounceRate", type: "dec" },
+                "LifetimeAvgOpenRate":        { key: "lifetimeAvgOpenRate", type: "dec" },
+                "LifetimeAvgCTR":             { key: "lifetimeAvgCTR", type: "dec" },
+                "LifetimeAvgCTOR":            { key: "lifetimeAvgCTOR", type: "dec" },
+                "LifetimeAvgUnsubscribeRate": { key: "lifetimeAvgUnsubscribeRate", type: "dec" },
+                "LifetimeAvgComplaintRate":   { key: "lifetimeAvgComplaintRate", type: "dec" },
+                "FirstActivityMonth":         { key: "firstActivityMonth", type: "date" },
+                "LastActivityMonth":          { key: "lastActivityMonth", type: "date" },
+                "InsertedDate":               { key: "insertedDate", type: "date" },
+                "ModifiedDate":               { key: "modifiedDate", type: "date" }
+            };
+            var defaults = {
+                signupIdentifier: "", consentStatus: "", originalCaptureSource: "",
+                latestCaptureSource: "", totalLifetimeSends: 0, totalLifetimeDelivered: 0,
+                totalLifetimeBounced: 0, totalLifetimeOpens: 0, totalLifetimeClicks: 0,
+                totalLifetimeUnsubscribes: 0, totalLifetimeComplaints: 0,
+                lifetimeAvgDeliveryRate: 0, lifetimeAvgBounceRate: 0, lifetimeAvgOpenRate: 0,
+                lifetimeAvgCTR: 0, lifetimeAvgCTOR: 0, lifetimeAvgUnsubscribeRate: 0,
+                lifetimeAvgComplaintRate: 0, firstActivityMonth: "", lastActivityMonth: "",
+                monthsActive: 0, insertedDate: "", modifiedDate: ""
+            };
+            var results = wsProxyRetrieveAll("Signup_Identifier_Performance_Lifetime", cols, null, 4, "Signup_Identifier_Performance_Lifetime");
+            for (var j = 0; j < results.length; j++) {
+                var obj = mapRow(results[j], fieldMap, defaults);
+                obj.monthsActive = computeMonthsActive(obj.firstActivityMonth, obj.lastActivityMonth);
+                allRecords.push(obj);
+            }
+            debugInfo += "Signup_Performance via WSProxy: " + allRecords.length + " records. ";
+        } catch (e) {
+            debugInfo += "Error in retrieveSignupPerformanceData: " + Stringify(e) + ". ";
+            allRecords = [];
+        }
+        return allRecords;
+    }
+
+    // Retrieve SignupIdentifier Performance data (regional breakdown)
+    // SignupIdentifier_Performance_Milwaukee is a Shared DE from the parent BU
+    // WSProxy CANNOT access this Shared DE (SFMC platform limitation).
+    // Per-culture LookupRows (39 calls) triggers SFMC execution limit.
+    // 
+    // Hybrid strategy to handle the 2000-row LookupRows cap:
+    // 1. Lightweight probe (LookupOrderedRows, max 50 rows) to find latest date
+    // 2. Single date-filtered LookupRows to get bulk data (up to 2000 rows)
+    // 3. If cap was hit, identify which cultures are missing from the results
+    // 4. Make targeted calls ONLY for the missing cultures (typically 0-10 calls)
+    // This scales gracefully as signup identifiers grow without hitting execution limits.
+    function retrieveSignupIdentifierPerformance() {
+        var allRecords = [];
+        var deName = "ENT.SignupIdentifier_Performance_Milwaukee";
+        
+        // All known cultures for gap-fill (Step 4)
+        var allCultures = [
+            "EN-GB", "EN-US", "DE-DE", "FR-FR", "ES-ES", "IT-IT",
+            "NL-NL", "NL-BE", "FR-BE", "DE-CH", "FR-CH", "IT-CH",
+            "DE-AT", "DA-DK", "SV-SE", "NB-NO", "NO-NO", "NN-NO",
+            "FI-FI", "PL-PL", "CS-CZ", "SK-SK", "HU-HU", "RO-RO",
+            "BG-BG", "PT-PT", "LB-LU", "FR-LU", "DE-LU", "ET-EE",
+            "LV-LV", "LT-LT", "EN-ZA", "AR-AE", "TR-TR", "EN-TT",
+            "FR0CH", "EN-AU", "EN-NZ", "SL-SI", "HR-HR"
+        ];
+        
+        try {
+            // STEP 0 (J2): Read the latest snapshot date from Dashboard_Config - a
+            // one-row LOCAL DE in this BU, maintained by OUR OWN daily automation
+            // (see DEPLOYMENT_NOTES.md - Task 10). "SignupIdPerf_LatestSnapshot" is
+            // just the ConfigKey value of that row, not a field or DE anywhere else.
+            // The Shared DE (ENT.SignupIdentifier_Performance_Milwaukee) is only
+            // ever READ by this design - nothing is added or changed on it.
+            // If the config DE or row doesn't exist yet, this falls through to the
+            // probe below, so the page keeps working before (or without) Task 10.
+            var latestDateText = "";
+            var configDateText = "";
+            try {
+                var cfgRows = Platform.Function.LookupRows("Dashboard_Config", "ConfigKey", "SignupIdPerf_LatestSnapshot");
+                if (cfgRows && cfgRows.length > 0 && cfgRows[0].ConfigValue) {
+                    configDateText = cfgRows[0].ConfigValue;
+                    latestDateText = configDateText;
+                    debugInfo += "SignupIdPerf config: latestDate=" + latestDateText + ". ";
+                }
+            } catch (ce) {
+                // Config DE not deployed yet - fall through to the probe.
+            }
+
+            // STEP 0b: Freshness check. The config row is only as fresh as our last
+            // automation run; if the parent BU has refreshed the Shared DE since
+            // then, one cheap ordered probe (1 row, one culture) catches the newer
+            // snapshot. Lexicographic comparison of SnapshotDate_as_text matches how
+            // this page already compares those values elsewhere. If the probe fails
+            // or finds nothing newer, the config value stands - worst case the tab
+            // is one refresh cycle behind, never broken. This also means Task 10's
+            // schedule doesn't need to chase the parent BU's refresh time.
+            if (configDateText !== "") {
+                try {
+                    var freshRows = Platform.Function.LookupOrderedRows(
+                        deName, 1, "SnapshotDate DESC",
+                        "UserCulture", "EN-GB"
+                    );
+                    if (freshRows && freshRows.length > 0) {
+                        var freshDateText = freshRows[0].SnapshotDate_as_text || "";
+                        if (freshDateText > latestDateText) {
+                            latestDateText = freshDateText;
+                            debugInfo += "SignupIdPerf freshness probe superseded config: latestDate=" + latestDateText + ". ";
+                        }
+                    }
+                } catch (fe) {
+                    // LookupOrderedRows can misbehave on Shared DEs - config stands.
+                }
+            }
+
+            // STEP 1: Lightweight probe to discover the latest SnapshotDate_as_text.
+            // Only runs when the config DE hasn't supplied the date (STEP 0).
+            // LookupOrderedRows returns max 50 rows sorted by date DESC for one culture.
+            // This is much cheaper than the previous unfiltered probe (2000 rows).
+            var probeCultures = ["EN-GB", "DE-DE", "FR-FR", "ES-ES", "IT-IT", "PL-PL", "EN-AU"];
+            
+            for (var p = 0; latestDateText === "" && p < probeCultures.length; p++) {
+                try {
+                    var probeRows = Platform.Function.LookupOrderedRows(
+                        deName, 50, "SnapshotDate DESC",
+                        "UserCulture", probeCultures[p]
+                    );
+                    if (probeRows && probeRows.length > 0) {
+                        // First row has the latest date (sorted DESC)
+                        latestDateText = probeRows[0].SnapshotDate_as_text || "";
+                        debugInfo += "SignupIdPerf probe: culture=" + probeCultures[p] + " latestDate=" + latestDateText + ". ";
+                        break;
+                    }
+                } catch (pe) {
+                    // LookupOrderedRows may not work on Shared DEs; fall back to LookupRows
+                }
+            }
+            
+            // Fallback probe if LookupOrderedRows didn't work
+            if (latestDateText === "") {
+                for (var p2 = 0; p2 < probeCultures.length; p2++) {
+                    try {
+                        var testRows = Platform.Function.LookupRows(deName, "UserCulture", probeCultures[p2]);
+                        if (testRows && testRows.length > 0) {
+                            var latestMs = 0;
+                            for (var i = 0; i < testRows.length; i++) {
+                                var dateStr = testRows[i].SnapshotDate || testRows[i].SnapshotDate_as_text || "";
+                                if (dateStr) {
+                                    var parsedMs = new Date(dateStr).getTime();
+                                    if (!isNaN(parsedMs) && parsedMs > latestMs) {
+                                        latestMs = parsedMs;
+                                        latestDateText = testRows[i].SnapshotDate_as_text || "";
+                                    }
+                                }
+                            }
+                            debugInfo += "SignupIdPerf fallback probe: culture=" + probeCultures[p2] + " latestDate=" + latestDateText + ". ";
+                            break;
+                        }
+                    } catch (pe2) {
+                        // Try next culture
+                    }
+                }
+            }
+            
+            if (latestDateText === "") {
+                debugInfo += "SignupIdPerf: No data found for any probe culture. ";
+                return allRecords;
+            }
+            
+            // STEP 2: Bulk retrieval - single date-filtered LookupRows call.
+            var dateRows = Platform.Function.LookupRows(deName, "SnapshotDate_as_text", latestDateText);
+            var dateRowCount = dateRows ? dateRows.length : 0;
+            debugInfo += "SignupIdPerf bulk(date=" + latestDateText + "): " + dateRowCount + " rows. ";
+            
+            // Track which cultures we got from the bulk call
+            var culturesFound = {};
+            var culturesFoundCount = 0;
+            
+            if (dateRows && dateRows.length > 0) {
+                for (var r = 0; r < dateRows.length; r++) {
+                    var row = dateRows[r];
+                    var rowCulture = row.UserCulture || "";
+                    if (rowCulture !== "All" && rowCulture !== "") {
+                        var obj = {
+                            snapshotDate: formatDateValue(row.SnapshotDate),
+                            signupIdentifier: row.SignupIdentifier || "",
+                            userCulture: rowCulture,
+                            totalUniqueParticipants: safeInteger(row.TotalUniqueParticipants),
+                            totalUniqueNewContacts: safeInteger(row.TotalUniqueNewContacts),
+                            snapshotDateText: latestDateText
+                        };
+                        allRecords.push(obj);
+                        var cultureKey = rowCulture.toUpperCase();
+                        if (!culturesFound[cultureKey]) {
+                            culturesFound[cultureKey] = true;
+                            culturesFoundCount++;
+                        }
+                    }
+                }
+            }
+            
+            debugInfo += "SignupIdPerf after bulk: " + allRecords.length + " regional records, " + culturesFoundCount + " cultures. ";
+            
+            // STEP 3: If we hit the 2000-row cap, identify and fill missing cultures.
+            // Only do gap-fill if the cap was actually hit.
+            if (dateRowCount >= 2000) {
+                var missingCultures = [];
+                for (var mc = 0; mc < allCultures.length; mc++) {
+                    if (!culturesFound[allCultures[mc].toUpperCase()]) {
+                        missingCultures.push(allCultures[mc]);
+                    }
+                }
+                
+                debugInfo += "SignupIdPerf gap-fill: " + missingCultures.length + " missing cultures. ";
+                
+                // Make targeted calls for missing cultures only
+                // Limit to 15 calls max to stay within SFMC execution limits
+                var maxGapFillCalls = 15;
+                var gapFillCount = Math.min(missingCultures.length, maxGapFillCalls);
+                
+                for (var g = 0; g < gapFillCount; g++) {
+                    try {
+                        var gapRows = Platform.Function.LookupRows(
+                            deName,
+                            "SnapshotDate_as_text", latestDateText,
+                            "UserCulture", missingCultures[g]
+                        );
+                        
+                        if (gapRows && gapRows.length > 0) {
+                            for (var gr = 0; gr < gapRows.length; gr++) {
+                                var gRow = gapRows[gr];
+                                var gObj = {
+                                    snapshotDate: formatDateValue(gRow.SnapshotDate),
+                                    signupIdentifier: gRow.SignupIdentifier || "",
+                                    userCulture: gRow.UserCulture || missingCultures[g],
+                                    totalUniqueParticipants: safeInteger(gRow.TotalUniqueParticipants),
+                                    totalUniqueNewContacts: safeInteger(gRow.TotalUniqueNewContacts),
+                                    snapshotDateText: latestDateText
+                                };
+                                allRecords.push(gObj);
+                            }
+                        }
+                    } catch (ge) {
+                        debugInfo += "SignupIdPerf gap-fill error at " + missingCultures[g] + ": " + ge.message + ". ";
+                        break; // Stop gap-fill on error to avoid cascade
+                    }
+                }
+                
+                if (missingCultures.length > maxGapFillCalls) {
+                    debugInfo += "WARNING: " + (missingCultures.length - maxGapFillCalls) + " cultures could not be gap-filled (limit). ";
+                }
+            }
+            
+            debugInfo += "SignupIdPerf final: " + allRecords.length + " records. ";
+            
+        } catch (e) {
+            debugInfo += "SignupIdPerf error: " + Stringify(e) + ". ";
+            allRecords = [];
+        }
+        
+        return allRecords;
+    }
+
+    // Retrieve lifetime metrics for a single signup source identifier
+    // Used by the signup-detail sub-page. Queries the local DE by SignupIdentifier.
+    function retrieveSignupSourceDetail(sourceIdentifier) {
+        var allRecords = [];
+        try {
+            var rows = Platform.Function.LookupRows("Signup_Identifier_Performance_Lifetime", "SignupIdentifier", sourceIdentifier);
+            if (rows && rows.length > 0) {
+                for (var i = 0; i < rows.length; i++) {
+                    var row = rows[i];
+                    var obj = {
+                        signupIdentifier: row.SignupIdentifier || "",
+                        consentStatus: row.ConsentStatus || "",
+                        originalCaptureSource: row.OriginalCaptureSource || "",
+                        latestCaptureSource: row.LatestCaptureSource || "",
+                        totalLifetimeSends: safeInteger(row.TotalLifetimeSends),
+                        totalLifetimeDelivered: safeInteger(row.TotalLifetimeDelivered),
+                        totalLifetimeBounced: safeInteger(row.TotalLifetimeBounced),
+                        totalLifetimeOpens: safeInteger(row.TotalLifetimeOpens),
+                        totalLifetimeClicks: safeInteger(row.TotalLifetimeClicks),
+                        totalLifetimeUnsubscribes: safeInteger(row.TotalLifetimeUnsubscribes),
+                        totalLifetimeComplaints: safeInteger(row.TotalLifetimeComplaints),
+                        lifetimeAvgDeliveryRate: safeDecimal(row.LifetimeAvgDeliveryRate),
+                        lifetimeAvgBounceRate: safeDecimal(row.LifetimeAvgBounceRate),
+                        lifetimeAvgOpenRate: safeDecimal(row.LifetimeAvgOpenRate),
+                        lifetimeAvgCTR: safeDecimal(row.LifetimeAvgCTR),
+                        lifetimeAvgCTOR: safeDecimal(row.LifetimeAvgCTOR),
+                        lifetimeAvgUnsubscribeRate: safeDecimal(row.LifetimeAvgUnsubscribeRate),
+                        lifetimeAvgComplaintRate: safeDecimal(row.LifetimeAvgComplaintRate),
+                        firstActivityMonth: formatDateValue(row.FirstActivityMonth),
+                        lastActivityMonth: formatDateValue(row.LastActivityMonth),
+                        monthsActive: computeMonthsActive(row.FirstActivityMonth, row.LastActivityMonth),
+                        insertedDate: formatDateValue(row.InsertedDate),
+                        modifiedDate: formatDateValue(row.ModifiedDate)
+                    };
+                    allRecords.push(obj);
+                }
+            }
+        } catch (e) {
+            debugInfo += "SignupSourceDetail error: " + Stringify(e) + ". ";
+        }
+        return allRecords;
+    }
+
+    // Retrieve regional breakdown for a single signup source identifier
+    // Queries the Shared DE filtered by SignupIdentifier.
+    // Returns max ~43 rows (one per culture), well under the 2000-row LookupRows cap.
+    function retrieveSignupSourceRegional(sourceIdentifier) {
+        var allRecords = [];
+        try {
+            var rows = Platform.Function.LookupRows(
+                "ENT.SignupIdentifier_Performance_Milwaukee",
+                "SignupIdentifier", sourceIdentifier
+            );
+            
+            if (rows && rows.length > 0) {
+                // Find the latest snapshot date
+                var latestDateText = "";
+                for (var d = 0; d < rows.length; d++) {
+                    var dt = rows[d].SnapshotDate_as_text || "";
+                    if (dt > latestDateText) {
+                        latestDateText = dt;
+                    }
+                }
+                
+                // Only return rows for the latest date, exclude "All" culture
+                for (var r = 0; r < rows.length; r++) {
+                    var row = rows[r];
+                    var rowDateText = row.SnapshotDate_as_text || "";
+                    var rowCulture = row.UserCulture || "";
+                    
+                    if (rowDateText === latestDateText && rowCulture !== "All" && rowCulture !== "") {
+                        var obj = {
+                            snapshotDate: formatDateValue(row.SnapshotDate),
+                            signupIdentifier: row.SignupIdentifier || "",
+                            userCulture: rowCulture,
+                            totalUniqueParticipants: safeInteger(row.TotalUniqueParticipants),
+                            totalUniqueNewContacts: safeInteger(row.TotalUniqueNewContacts),
+                            snapshotDateText: latestDateText
+                        };
+                        allRecords.push(obj);
+                    }
+                }
+            }
+        } catch (e) {
+            debugInfo += "SignupSourceRegional error: " + Stringify(e) + ". ";
+        }
+        return allRecords;
+    }
+
+    // Retrieve DOI Pending Contacts aggregated data
+    // This queries the pre-aggregated DOI_Pending_Contacts_Aggregated DE
+    // which is populated daily by an Automation Studio SQL Query Activity
+    // Now includes SignupIdentifier for dual views (by Region and by Identifier)
+    function retrieveDOIPendingContacts() {
+        // (J1) WSProxy-first rewrite (promoted from the previous catch-block
+        // fallback) for consistency with the other retrieval functions. The
+        // aggregated DE is small (one row per region/journeyType/identifier),
+        // so two batches is ample headroom.
+        var allRecords = [];
+        try {
+            var cols = ["SnapshotDate", "Region", "JourneyType", "SignupIdentifier", "PendingCount", "OldestPendingDate", "NewestPendingDate", "InsertedDate"];
+            var fieldMap = {
+                "SnapshotDate":      { key: "snapshotDate", type: "date" },
+                "Region":            { key: "region", type: "upper" },
+                "JourneyType":       { key: "journeyType", type: "text" },
+                "SignupIdentifier":  { key: "signupIdentifier", type: "text", fallback: "Unknown" },
+                "PendingCount":      { key: "pendingCount", type: "int" },
+                "OldestPendingDate": { key: "oldestPendingDate", type: "date" },
+                "NewestPendingDate": { key: "newestPendingDate", type: "date" },
+                "InsertedDate":      { key: "insertedDate", type: "date" }
+            };
+            var defaults = {
+                snapshotDate: "", region: "", journeyType: "", signupIdentifier: "Unknown",
+                pendingCount: 0, oldestPendingDate: "", newestPendingDate: "", insertedDate: ""
+            };
+            var results = wsProxyRetrieveAll("DOI_Pending_Contacts_Aggregated", cols, null, 2, "DOI_Pending_Contacts_Aggregated");
+            for (var j = 0; j < results.length; j++) {
+                allRecords.push(mapRow(results[j], fieldMap, defaults));
+            }
+        } catch (e) {
+            debugInfo += "Error in retrieveDOIPendingContacts: " + Stringify(e) + ". ";
+            allRecords = [];
+        }
+        return allRecords;
+    }
+
+    // Retrieve MyAccount_Daily_Summary - headline totals per registration date
+    // This DE is small (one row per unique RegistrationDate) so 1-2 batches suffice.
+    function retrieveMyAccountSummary() {
+        var allRecords = [];
+        try {
+            var prox = new Script.Util.WSProxy();
+            var cols = ["RegistrationDateOnly", "TotalAccounts", "UniqueContacts", "MarketingOptedIn", "MarketingNotOptedIn", "ActiveRegions", "TradeCategories", "OptInRatePct"];
+            var moreData = true;
+            var reqID = null;
+            var batchCount = 0;
+            var maxBatches = 5;
+            var opts = { BatchSize: 2500 };
+            var props = {};
+
+            while (moreData && batchCount < maxBatches) {
+                moreData = false;
+                if (reqID) { props.ContinueRequest = reqID; }
+                var data = prox.retrieve("DataExtensionObject[MyAccount_Daily_Summary]", cols, null, opts, props);
+
+                if (data && data.Results) {
+                    moreData = data.HasMoreRows;
+                    reqID = data.RequestID;
+                    batchCount++;
+
+                    for (var j = 0; j < data.Results.length; j++) {
+                        var result = data.Results[j];
+                        var obj = {
+                            registrationDateOnly: "",
+                            totalAccounts: 0,
+                            uniqueContacts: 0,
+                            marketingOptedIn: 0,
+                            marketingNotOptedIn: 0,
+                            activeRegions: 0,
+                            tradeCategories: 0,
+                            optInRatePct: 0
+                        };
+
+                        for (var k = 0; k < result.Properties.length; k++) {
+                            var prop = result.Properties[k];
+                            switch (prop.Name) {
+                                case "RegistrationDateOnly": obj.registrationDateOnly = formatDateValue(prop.Value); break;
+                                case "TotalAccounts": obj.totalAccounts = safeInteger(prop.Value); break;
+                                case "UniqueContacts": obj.uniqueContacts = safeInteger(prop.Value); break;
+                                case "MarketingOptedIn": obj.marketingOptedIn = safeInteger(prop.Value); break;
+                                case "MarketingNotOptedIn": obj.marketingNotOptedIn = safeInteger(prop.Value); break;
+                                case "ActiveRegions": obj.activeRegions = safeInteger(prop.Value); break;
+                                case "TradeCategories": obj.tradeCategories = safeInteger(prop.Value); break;
+                                case "OptInRatePct": obj.optInRatePct = safeDecimal(prop.Value); break;
+                            }
+                        }
+                        allRecords.push(obj);
+                    }
+                }
+            }
+        } catch (e) {
+            debugInfo += "Error in retrieveMyAccountSummary: " + Stringify(e) + ". ";
+        }
+        return allRecords;
+    }
+
+    // Retrieve MyAccount_Daily_Region_Summary - totals by registration date and culture
+    function retrieveMyAccountRegionSummary() {
+        var allRecords = [];
+        try {
+            var prox = new Script.Util.WSProxy();
+            var cols = ["RegistrationDateOnly", "UserCulture", "TotalAccounts", "UniqueContacts", "MarketingOptedIn", "MarketingNotOptedIn", "OptInRatePct"];
+            var moreData = true;
+            var reqID = null;
+            var batchCount = 0;
+            var maxBatches = 15;
+            var opts = { BatchSize: 2500 };
+            var props = {};
+
+            while (moreData && batchCount < maxBatches) {
+                moreData = false;
+                if (reqID) { props.ContinueRequest = reqID; }
+                var data = prox.retrieve("DataExtensionObject[MyAccount_Daily_Region_Summary]", cols, null, opts, props);
+
+                if (data && data.Results) {
+                    moreData = data.HasMoreRows;
+                    reqID = data.RequestID;
+                    batchCount++;
+
+                    for (var j = 0; j < data.Results.length; j++) {
+                        var result = data.Results[j];
+                        var obj = {
+                            registrationDateOnly: "",
+                            userCulture: "",
+                            totalAccounts: 0,
+                            uniqueContacts: 0,
+                            marketingOptedIn: 0,
+                            marketingNotOptedIn: 0,
+                            optInRatePct: 0
+                        };
+
+                        for (var k = 0; k < result.Properties.length; k++) {
+                            var prop = result.Properties[k];
+                            switch (prop.Name) {
+                                case "RegistrationDateOnly": obj.registrationDateOnly = formatDateValue(prop.Value); break;
+                                case "UserCulture": obj.userCulture = (prop.Value || "").toUpperCase(); break;
+                                case "TotalAccounts": obj.totalAccounts = safeInteger(prop.Value); break;
+                                case "UniqueContacts": obj.uniqueContacts = safeInteger(prop.Value); break;
+                                case "MarketingOptedIn": obj.marketingOptedIn = safeInteger(prop.Value); break;
+                                case "MarketingNotOptedIn": obj.marketingNotOptedIn = safeInteger(prop.Value); break;
+                                case "OptInRatePct": obj.optInRatePct = safeDecimal(prop.Value); break;
+                            }
+                        }
+                        allRecords.push(obj);
+                    }
+                }
+            }
+
+            if (batchCount >= maxBatches && moreData) {
+                debugInfo += "MyAccount_Daily_Region_Summary truncated at " + (batchCount * 2500) + " records. ";
+            }
+        } catch (e) {
+            debugInfo += "Error in retrieveMyAccountRegionSummary: " + Stringify(e) + ". ";
+        }
+        return allRecords;
+    }
+
+    // Retrieve MyAccount_Daily_Trade_Summary - totals by registration date and trade
+    function retrieveMyAccountTradeSummary() {
+        var allRecords = [];
+        try {
+            var prox = new Script.Util.WSProxy();
+            var cols = ["RegistrationDateOnly", "PrimaryTradeNormalised", "TotalAccounts", "MarketingOptedIn", "MarketingNotOptedIn", "OptInRatePct"];
+            var moreData = true;
+            var reqID = null;
+            var batchCount = 0;
+            var maxBatches = 10;
+            var opts = { BatchSize: 2500 };
+            var props = {};
+
+            while (moreData && batchCount < maxBatches) {
+                moreData = false;
+                if (reqID) { props.ContinueRequest = reqID; }
+                var data = prox.retrieve("DataExtensionObject[MyAccount_Daily_Trade_Summary]", cols, null, opts, props);
+
+                if (data && data.Results) {
+                    moreData = data.HasMoreRows;
+                    reqID = data.RequestID;
+                    batchCount++;
+
+                    for (var j = 0; j < data.Results.length; j++) {
+                        var result = data.Results[j];
+                        var obj = {
+                            registrationDateOnly: "",
+                            primaryTradeNormalised: "",
+                            totalAccounts: 0,
+                            marketingOptedIn: 0,
+                            marketingNotOptedIn: 0,
+                            optInRatePct: 0
+                        };
+
+                        for (var k = 0; k < result.Properties.length; k++) {
+                            var prop = result.Properties[k];
+                            switch (prop.Name) {
+                                case "RegistrationDateOnly": obj.registrationDateOnly = formatDateValue(prop.Value); break;
+                                case "PrimaryTradeNormalised": obj.primaryTradeNormalised = prop.Value || ""; break;
+                                case "TotalAccounts": obj.totalAccounts = safeInteger(prop.Value); break;
+                                case "MarketingOptedIn": obj.marketingOptedIn = safeInteger(prop.Value); break;
+                                case "MarketingNotOptedIn": obj.marketingNotOptedIn = safeInteger(prop.Value); break;
+                                case "OptInRatePct": obj.optInRatePct = safeDecimal(prop.Value); break;
+                            }
+                        }
+                        allRecords.push(obj);
+                    }
+                }
+            }
+
+            if (batchCount >= maxBatches && moreData) {
+                debugInfo += "MyAccount_Daily_Trade_Summary truncated at " + (batchCount * 2500) + " records. ";
+            }
+        } catch (e) {
+            debugInfo += "Error in retrieveMyAccountTradeSummary: " + Stringify(e) + ". ";
+        }
+        return allRecords;
+    }
+
+    // Output data as JavaScript variables for the client-side UI to consume.
+    // SECURITY: safeScriptJSON() prevents a value containing "</script>" from
+    // terminating this inline script block (page breakage / injection vector).
+    // String values are serialised via Stringify() so quotes AND backslashes
+    // are escaped correctly, then passed through the same guard.
+    function safeScriptJSON(json) {
+        return String(json).replace(/<\//g, '<\\/');
+    }
+    function safeScriptString(value) {
+        return safeScriptJSON(Stringify(String(value == null ? "" : value)));
+    }
+
+    Write('<script type="text/javascript">\n');
+    Write('var dailySnapshotData = ' + safeScriptJSON(dailySnapshotJSON) + ';\n');
+    Write('var l1TradeData = ' + safeScriptJSON(l1TradeJSON) + ';\n');
+    Write('var regionalMetricsData = ' + safeScriptJSON(regionalMetricsJSON) + ';\n');
+    Write('var sendFactData = ' + safeScriptJSON(sendFactJSON) + ';\n');
+    Write('var sendFactLookbackDate = ' + safeScriptString(sendFactLookbackDate) + ';\n');
+    Write('var sendFactLookbackDays = ' + (sendFactLookbackDays || 0) + ';\n');
+    Write('var signupPerformanceData = ' + safeScriptJSON(signupPerformanceJSON) + ';\n');
+    Write('var signupIdentifierPerformanceData = ' + safeScriptJSON(signupIdentifierPerformanceJSON) + ';\n');
+    Write('var pendingContactsData = ' + safeScriptJSON(pendingContactsJSON) + ';\n');
+    Write('var signupSourceDetailData = ' + safeScriptJSON(signupSourceDetailJSON) + ';\n');
+    Write('var signupSourceRegionalData = ' + safeScriptJSON(signupSourceRegionalJSON) + ';\n');
+    Write('var signupDetailSource = ' + safeScriptString(signupDetailSourceParam) + ';\n');
+    Write('var myAccountSummaryData = ' + safeScriptJSON(myAccountSummaryJSON) + ';\n');
+    Write('var myAccountRegionData = ' + safeScriptJSON(myAccountRegionJSON) + ';\n');
+    Write('var myAccountTradeData = ' + safeScriptJSON(myAccountTradeJSON) + ';\n');
+    Write('var debugInfo = ' + safeScriptString(debugInfo) + ';\n');
+    Write('var errorMsg = ' + safeScriptString(errorMessage) + ';\n');
+    Write('var currentUser = ' + safeScriptString(username) + ';\n');
+    Write('var sessionKey = ' + safeScriptString(sessionkey) + ';\n');
+    Write('var activeTabLoaded = ' + safeScriptString(activeTab) + ';\n');
+    Write('</script>\n');
+</script>
+    
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.5.0/font/bootstrap-icons.css">
+    <!-- Optimized Chart.js with defer for better performance -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/3.9.1/chart.min.js" defer></script>
+    <!-- Dashboard application JS served from a CloudPage Code Resource (JavaScript
+         type). defer guarantees it executes after document parse and after Chart.js
+         (defer scripts run in document order), and the inline data block above has
+         already defined the server-injected globals it reads. -->
+    <script src="https://cloud.mail.milwaukeetool.eu/dashboard-app?v=%%=v(@assetVersion)=%%" defer></script>
+    <!-- Dashboard styles served from a CloudPage Code Resource (CSS type).
+         Same-origin + same URL across every tab iframe = downloaded once,
+         served from browser cache thereafter. Bump @assetVersion on deploy. -->
+    <link rel="stylesheet" href="https://cloud.mail.milwaukeetool.eu/dashboard-styles?v=%%=v(@assetVersion)=%%">
+</head>
+<body>
+    <!-- Detect if loaded inside the loader iframe and hide duplicate navbar -->
+    <script>if(window.self!==window.top){document.body.classList.add('in-iframe');}</script>
+    <nav class="navbar navbar-expand-lg navbar-dark">
+        <a class="navbar-brand" href="#" onclick="switchTab('overview')">
+            <img src="https://image.s50.sfmc-content.com/lib/fe301171756404787c1679/m/1/64df413e-b0d9-4895-8713-e2b03950c008.png" alt="Milwaukee" height="70">
+            <strong>Subscriber Analytics Dashboard</strong>
+        </a>
+        
+        <div class="navbar-nav ms-auto">
+            <span class="navbar-text text-white">
+                Logged in as: <strong id="username">%%=v(@username)=%%</strong>
+            </span>
+        </div>
+    </nav>
+
+    <div class="container mt-4">
+        <div id="infoBox" class="info-box"></div>
+
+        <!-- TABBED DASHBOARD INTERFACE -->
+        <div class="dashboard-tabs-container">
+            
+            <!-- Global Filters Bar -->
+            <div class="global-filters">
+                <div class="global-filter-group">
+                    <label for="global-date-from">Date From</label>
+                    <input type="date" id="global-date-from" onchange="applyGlobalFiltersDebounced()">
+                </div>
+                <div class="global-filter-group">
+                    <label for="global-date-to">Date To</label>
+                    <input type="date" id="global-date-to" onchange="applyGlobalFiltersDebounced()">
+                </div>
+                <div class="global-filter-group" style="flex: 2;">
+                    <label>Regions</label>
+                    <div class="region-filter-container">
+                        <button type="button" class="region-filter-button" id="global-region-button" onclick="toggleRegionFilter('global')">
+                            <span id="global-region-label">All Regions</span>
+                            <span>▼</span>
+                        </button>
+                        <div class="region-filter-dropdown" id="global-region-dropdown">
+                            <div class="region-filter-header">
+                                <h4>Select Regions</h4>
+                                <div class="region-filter-actions">
+                                    <button type="button" class="region-filter-action-btn" onclick="selectAllRegions('global')">Select All</button>
+                                    <button type="button" class="region-filter-action-btn" onclick="clearAllRegions('global')">Clear All</button>
+                                </div>
+                            </div>
+                            <div id="global-region-groups"></div>
+                        </div>
+                    </div>
+                </div>
+                <div class="global-filter-group">
+                    <label for="global-trade">Primary Trade</label>
+                    <select id="global-trade" onchange="applyGlobalFiltersDebounced()">
+                        <option value="">All Trades</option>
+                    </select>
+                </div>
+            </div>
+            
+            <!-- Mobile Tab Dropdown (visible on mobile only) -->
+            <div class="mobile-tab-dropdown">
+                <select id="mobileTabSelector" onchange="switchTab(this.value)" aria-label="Navigate between dashboard sections">
+                    <option value="overview">📊 Overview</option>
+                    <option value="email">✉️ Email Analytics</option>
+                    <option value="campaigns">📢 Campaigns</option>
+                    <option value="growth">📈 Growth Trends</option>
+                    <option value="signups">👤 Signup Sources</option>
+                    <option value="myaccount">⚙️ MyAccount</option>
+                </select>
+            </div>
+            
+            <!-- Tab Navigation Bar (hidden on mobile) -->
+            <nav class="dashboard-tabs">
+                <button class="tab-btn active" data-tab="overview" onclick="switchTab('overview')">
+                    <i class="bi bi-speedometer2"></i> Overview
+                </button>
+                <button class="tab-btn" data-tab="email" onclick="switchTab('email')">
+                    <i class="bi bi-envelope"></i> Email Analytics
+                </button>
+                <button class="tab-btn" data-tab="campaigns" onclick="switchTab('campaigns')">
+                    <i class="bi bi-megaphone"></i> Campaigns
+                </button>
+                <button class="tab-btn" data-tab="growth" onclick="switchTab('growth')">
+                    <i class="bi bi-graph-up"></i> Growth Trends
+                </button>
+                <button class="tab-btn" data-tab="signups" onclick="switchTab('signups')">
+                    <i class="bi bi-person-plus"></i> Signup Sources
+                </button>
+                <button class="tab-btn" data-tab="myaccount" onclick="switchTab('myaccount')">
+                    <i class="bi bi-person-gear"></i> MyAccount
+                </button>
+            </nav>
+            
+            <!-- Tab Content Areas -->
+            <div class="tab-content">
+                
+                <!-- OVERVIEW TAB -->
+                <div class="tab-pane active" id="overview-tab">
+
+                    <!-- Stats Cards will go here -->
+                    <div class="stats-cards" id="statsCards">
+                        <div class="stat-card">
+                            <div class="stat-value" id="totalSubscribers">0</div>
+                            <div class="stat-label">Current Total Subscribers</div>
+                        </div>
+                        <div class="stat-card clickable" onclick="showStatDetails('regions')" title="Click to see regions">
+                            <span class="stat-card-info-icon">i</span>
+                            <div class="stat-value" id="totalRegions">0</div>
+                            <div class="stat-label">Regions with Subscribers</div>
+                        </div>
+                        <div class="stat-card clickable" onclick="showStatDetails('trades')" title="Click to see trades">
+                            <span class="stat-card-info-icon">i</span>
+                            <div class="stat-value" id="totalTrades">0</div>
+                            <div class="stat-label">Primary Trades</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-value" id="avgSubscribers">0</div>
+                            <div class="stat-label">Average per Region</div>
+                        </div>
+                    </div>
+                    
+                    <!-- Popup elements for stat details -->
+                    <div class="stat-details-overlay" id="statDetailsOverlay" onclick="hideStatDetails()"></div>
+                    <div class="stat-details-popup" id="statDetailsPopup">
+                        <div class="stat-details-header">
+                            <span class="stat-details-title" id="statDetailsTitle">Details</span>
+                            <button class="stat-details-close" onclick="hideStatDetails()">×</button>
+                        </div>
+                        <div class="stat-details-content" id="statDetailsContent">
+                            <!-- Content will be dynamically populated -->
+                        </div>
+                    </div>
+
+                    <!-- DOI Pending Contacts Section -->
+                    <div class="pending-contacts-section" id="pendingContactsSection">
+                        <h2><span class="pending-icon">⏳</span> Pending Double Opt-In Confirmations</h2>
+                        
+                        <div class="pending-info-box">
+                            <strong>Note:</strong> Contacts shown below are awaiting email confirmation. Confirmation links remain valid for <strong>3 days</strong> from the token date. Data is refreshed daily.
+                        </div>
+                        
+                        <!-- Summary Stats -->
+                        <div class="pending-stats-grid" id="pendingStatsGrid">
+                            <div class="pending-stat-card total-card">
+                                <div class="pending-stat-value" id="pendingTotalCount">0</div>
+                                <div class="pending-stat-label">Total Pending</div>
+                                <div class="pending-stat-sublabel">Across all regions</div>
+                            </div>
+                            <div class="pending-stat-card">
+                                <div class="pending-stat-value" id="pendingGenericCount">0</div>
+                                <div class="pending-stat-label">Generic Journey</div>
+                                <div class="pending-stat-sublabel">Standard signups</div>
+                            </div>
+                            <div class="pending-stat-card">
+                                <div class="pending-stat-value" id="pendingPEMCount">0</div>
+                                <div class="pending-stat-label">PEM Journey</div>
+                                <div class="pending-stat-sublabel">Prize Every Month</div>
+                            </div>
+                            <div class="pending-stat-card">
+                                <div class="pending-stat-value" id="pendingRegionCount">0</div>
+                                <div class="pending-stat-label">Regions</div>
+                                <div class="pending-stat-sublabel">With pending contacts</div>
+                            </div>
+                            <div class="pending-stat-card">
+                                <div class="pending-stat-value" id="pendingIdentifierCount">0</div>
+                                <div class="pending-stat-label">Signup Sources</div>
+                                <div class="pending-stat-sublabel">With pending contacts</div>
+                            </div>
+                        </div>
+                        
+                        <!-- View Toggle -->
+                        <div class="pending-view-toggle">
+                            <button class="pending-view-btn active" data-view="region" onclick="togglePendingView('region')">
+                                <i class="bi bi-globe"></i> By Region
+                            </button>
+                            <button class="pending-view-btn" data-view="identifier" onclick="togglePendingView('identifier')">
+                                <i class="bi bi-tag"></i> By Signup Identifier
+                            </button>
+                        </div>
+                        
+                        <!-- Regional Breakdown Table -->
+                        <div class="pending-table-container" id="pendingRegionTableContainer">
+                            <table class="pending-table">
+                                <thead>
+                                    <tr>
+                                        <th>Region</th>
+                                        <th>Pending Count</th>
+                                        <th>Generic</th>
+                                        <th>PEM</th>
+                                        <th>Oldest Pending</th>
+                                        <th>Newest Pending</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="pendingRegionTableBody">
+                                    <!-- Table content will be populated by JavaScript -->
+                                </tbody>
+                            </table>
+                        </div>
+                        
+                        <!-- Signup Identifier Breakdown Table -->
+                        <div class="pending-table-container d-none" id="pendingIdentifierTableContainer">
+                            <table class="pending-table">
+                                <thead>
+                                    <tr>
+                                        <th>Signup Identifier</th>
+                                        <th>Pending Count</th>
+                                        <th>Regions</th>
+                                        <th>Generic</th>
+                                        <th>PEM</th>
+                                        <th>Oldest Pending</th>
+                                        <th>Newest Pending</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="pendingIdentifierTableBody">
+                                    <!-- Table content will be populated by JavaScript -->
+                                </tbody>
+                            </table>
+                        </div>
+                        
+                        <div class="pending-last-updated" id="pendingLastUpdated">
+                            <!-- Last updated timestamp will be set by JavaScript -->
+                        </div>
+                    </div>
+
+                    <!-- Subscriber Count Snapshots Section -->
+                    <div class="data-section" id="subscriberSnapshotsSection">
+                        <h2>Subscriber Count Snapshots by Region</h2>
+                        <div class="table-controls">
+                            <div class="view-toggle">
+                                <button class="view-btn" data-view="chart" onclick="toggleSubscriberSnapshotView('chart')">Doughnut</button>
+                                <button class="view-btn" data-view="bar" onclick="toggleSubscriberSnapshotView('bar')">Bar Chart</button>
+                                <button class="view-btn active" data-view="stacked" onclick="toggleSubscriberSnapshotView('stacked')">Stacked Bar</button>
+                                <button class="view-btn" data-view="table" onclick="toggleSubscriberSnapshotView('table')">Table View</button>
+                            </div>
+                        </div>
+                        <div class="chart-container" id="subscriberSnapshotChartContainer">
+                            <canvas id="subscriberSnapshotChart"></canvas>
+                            <div class="no-data d-none" id="subscriberSnapshotChartEmpty">No data available for selected filters</div>
+                        </div>
+                        <div class="table-container d-none" id="subscriberTableContainer">
+                            <div id="subscriberTableBody"></div>
+                        </div>
+                    </div>
+
+                    <!-- Primary Trade Distribution Section -->
+                    <div class="data-section" id="tradeDistributionSection">
+                        <h2 id="tradeDistributionTitle">Primary Trade Distribution</h2>
+                        <div class="table-controls">
+                            <div class="view-toggle">
+                                <button class="view-btn active" data-view="chart" onclick="toggleTradeSnapshotView('chart')">Doughnut</button>
+                                <button class="view-btn" data-view="bar" onclick="toggleTradeSnapshotView('bar')">Bar Chart</button>
+                                <button class="view-btn" data-view="stacked" onclick="toggleTradeSnapshotView('stacked')">Stacked Bar</button>
+                                <button class="view-btn" data-view="table" onclick="toggleTradeSnapshotView('table')">Table View</button>
+                                <button class="view-btn d-none" onclick="toggleAllGroups('trade', true)">Expand All</button>
+                                <button class="view-btn d-none" onclick="toggleAllGroups('trade', false)">Collapse All</button>
+                            </div>
+                            <div class="pagination d-none" id="tradePagination">
+                                <span class="pagination-info" id="tradePageInfo">Page 1 of 1</span>
+                                <div class="pagination-controls" id="tradePageControls"></div>
+                            </div>
+                        </div>
+                        <div class="chart-container" id="tradeSnapshotChartContainer">
+                            <canvas id="tradeSnapshotChart"></canvas>
+                            <div class="no-data d-none" id="tradeSnapshotChartEmpty">No data available for selected filters</div>
+                        </div>
+                        <div class="table-container d-none" id="tradeTableContainer">
+                            <div id="tradeTableBody"></div>
+                        </div>
+                    </div>
+                    
+                </div>
+                
+                <!-- EMAIL ANALYTICS TAB -->
+                <div class="tab-pane" id="email-tab">
+                    <!-- EMAIL CAMPAIGN ANALYTICS SECTION -->
+                    <div class="email-analytics-section" id="emailAnalyticsSection">
+                        <h2>Regional Email Campaign Performance Analytics</h2>
+                        
+                        <!-- Quick period selector -->
+                        <div class="email-period-selector mb-4">
+                            <button class="period-btn active" onclick="setEmailPeriod('current-month', event)">Current Month</button>
+                            <button class="period-btn" onclick="setEmailPeriod('last-month', event)">Last Month</button>
+                            <button class="period-btn" onclick="setEmailPeriod('last-3-months', event)">Last 3 Months</button>
+                            <button class="period-btn" onclick="setEmailPeriod('all-time', event)">All Time</button>
+                        </div>
+                        
+                        <!-- Hidden date inputs for period filtering -->
+                        <input type="hidden" id="dateFrom" name="dateFrom">
+                        <input type="hidden" id="dateTo" name="dateTo">
+                        
+                        <div class="email-stats-grid" id="emailStatsGrid">
+                            <!-- Stats cards will be populated by JavaScript -->
+                        </div>
+
+                        <div class="email-chart-container">
+                            <div class="text-center mb-3 text-muted fst-italic small">
+                                📊 Chart shows all available historical data for trend analysis. Metrics above reflect selected period only.
+                            </div>
+                            <canvas id="emailChart"></canvas>
+                        </div>
+
+                        <div class="email-table-container">
+                            <table class="email-table">
+                                <thead>
+                                    <tr>
+                                        <th>Period</th>
+                                        <th>Region</th>
+                                        <th>Total Sent</th>
+                                        <th>Delivered</th>
+                                        <th>Delivery Rate</th>
+                                        <th>Opens</th>
+                                        <th>Open Rate</th>
+                                        <th>Clicks</th>
+                                        <th>CTR</th>
+                                        <th>CTOR</th>
+                                        <th>Unsubscribed</th>
+                                        <th>Unsub Rate</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="emailTableBody">
+                                    <!-- Table content will be populated by JavaScript -->
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- CAMPAIGNS TAB -->
+                <div class="tab-pane" id="campaigns-tab">
+                    <!-- CAMPAIGN DETAILS SECTION -->
+                    <div class="campaign-details-section" id="campaignDetailsSection">
+                        <h2>Campaign Performance Details</h2>
+                        
+                        <div class="campaign-filters">
+                            <div class="campaign-filter-group">
+                                <label for="campaignSearchInput">Search Email Name/Subject:</label>
+                                <input type="text" id="campaignSearchInput" placeholder="Type to search..." oninput="debouncedFilterCampaigns()">
+                            </div>
+                            <div class="campaign-filter-group" style="flex: 2;">
+                                <label>Filter by Region:</label>
+                                <div class="region-filter-container">
+                                    <button type="button" class="region-filter-button" id="campaign-region-button" onclick="toggleRegionFilter('campaign')">
+                                        <span id="campaign-region-label">All Regions</span>
+                                        <span>▼</span>
+                                    </button>
+                                    <div class="region-filter-dropdown" id="campaign-region-dropdown">
+                                        <div class="region-filter-header">
+                                            <h4>Select Regions</h4>
+                                            <div class="region-filter-actions">
+                                                <button type="button" class="region-filter-action-btn" onclick="selectAllRegions('campaign')">Select All</button>
+                                                <button type="button" class="region-filter-action-btn" onclick="clearAllRegions('campaign')">Clear All</button>
+                                            </div>
+                                        </div>
+                                        <div id="campaign-region-groups"></div>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="campaign-filter-group">
+                                <label for="campaignStartDate">From Date:</label>
+                                <input type="date" id="campaignStartDate" onchange="filterCampaigns()">
+                            </div>
+                            <div class="campaign-filter-group">
+                                <label for="campaignEndDate">To Date:</label>
+                                <input type="date" id="campaignEndDate" onchange="filterCampaigns()">
+                            </div>
+                            <div class="campaign-filter-group">
+                                <label>&nbsp;</label>
+                                <button class="btn btn-outline-primary" onclick="clearCampaignFilters()">Clear Filters</button>
+                            </div>
+                        </div>
+                        
+                        <div style="display: flex; align-items: center; gap: 10px; padding: 10px 0; margin-bottom: 1rem; border-bottom: 1px solid #e8e8e8;">
+                            <input type="checkbox" id="hideTestSends" checked onchange="filterCampaigns()" style="width: 16px; height: 16px; cursor: pointer; margin: 0; accent-color: #DB021D;">
+                            <label for="hideTestSends" style="margin: 0; cursor: pointer; font-size: 13px; color: #666; user-select: none;">
+                                Hide test sends <span style="color: #999; font-size: 12px;">(excludes [Test]/[Draft] and single-recipient emails)</span>
+                            </label>
+                        </div>
+                        
+                        <!-- Data Limit Warning Banner -->
+                        <div id="campaignLimitWarning" style="display: none; background: #fff3cd; border: 1px solid #ffc107; border-radius: 4px; padding: 12px 16px; margin-bottom: 1rem;">
+                            <div style="display: flex; align-items: start; gap: 10px;">
+                                <span style="font-size: 20px;">⚠️</span>
+                                <div style="flex: 1;">
+                                    <strong style="color: #856404;">Filter Extends Beyond Loaded Data</strong>
+                                    <p style="margin: 5px 0 0 0; color: #856404; font-size: 13px;">
+                                        Your <em>From&nbsp;Date</em> is earlier than the loaded window. This view contains
+                                        campaigns sent on or after <strong><span id="campaignLookbackDate">—</span></strong>
+                                        (last <span id="campaignLookbackDays">—</span>&nbsp;days). To include older
+                                        campaigns, reload with <code>?campaignDays=N</code> in the URL (e.g.
+                                        <code>?campaignDays=365</code>, max&nbsp;730).
+                                    </p>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="campaign-table-container">
+                            <table class="campaign-table" id="campaignTable">
+                                <thead>
+                                    <tr>
+                                        <th class="sortable" onclick="sortCampaigns('sendDate')">Send Date</th>
+                                        <th class="sortable" onclick="sortCampaigns('emailName')">Email Name</th>
+                                        <th class="sortable" onclick="sortCampaigns('emailSubject')">Subject</th>
+                                        <th class="sortable" onclick="sortCampaigns('region')">Region</th>
+                                        <th class="sortable" onclick="sortCampaigns('totalSent')">Total Sent</th>
+                                        <th class="sortable" onclick="sortCampaigns('deliveryRate')">Delivery %</th>
+                                        <th class="sortable" onclick="sortCampaigns('openRate')">Open %</th>
+                                        <th class="sortable" onclick="sortCampaigns('clickRate')">Click %</th>
+                                        <th class="sortable" onclick="sortCampaigns('clickToOpenRate')">CTOR %</th>
+                                        <th class="sortable" onclick="sortCampaigns('unsubscribeRate')">Unsub %</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="campaignTableBody">
+                                    <!-- Table content will be populated by JavaScript -->
+                                </tbody>
+                            </table>
+                        </div>
+
+                        <div class="campaign-pagination">
+                            <div class="campaign-pagination-info" id="campaignPaginationInfo">
+                                Showing 0 of 0 campaigns
+                            </div>
+                            <div class="campaign-pagination-controls">
+                                <button class="campaign-pagination-btn" id="campaignPrevBtn" onclick="changeCampaignPage(-1)">◀ Previous</button>
+                                <button class="campaign-pagination-btn" id="campaignNextBtn" onclick="changeCampaignPage(1)">Next ▶</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- GROWTH TRENDS TAB -->
+                <div class="tab-pane" id="growth-tab">
+                    <!-- Growth Insight Cards -->
+                    <div class="growth-insights" id="growthInsightCards">
+                        <div class="growth-insight-card" style="animation-delay: 0.1s;">
+                            <div class="growth-insight-value" id="growthCurrentTotal">-</div>
+                            <div class="growth-insight-label">Current Total Subscribers</div>
+                        </div>
+                        <div class="growth-insight-card" style="animation-delay: 0.2s;">
+                            <div class="growth-insight-value" id="growthNetChange">-</div>
+                            <div class="growth-insight-label">Net Change (Period)</div>
+                        </div>
+                        <div class="growth-insight-card" style="animation-delay: 0.3s;">
+                            <div class="growth-insight-value" id="growthRate">-</div>
+                            <div class="growth-insight-label">Growth Rate</div>
+                        </div>
+                        <div class="growth-insight-card" style="animation-delay: 0.4s;">
+                            <div class="growth-insight-value" id="growthAvgDaily">-</div>
+                            <div class="growth-insight-label">Avg. Daily Growth</div>
+                        </div>
+                    </div>
+
+                    <!-- Growth Chart Section -->
+                    <div class="chart-section" id="growthChartSection">
+                        <h2 id="growthChartTitle">Total Subscriber Count Over Time</h2>
+                        <div class="chart-controls">
+                            <button class="chart-toggle active" onclick="toggleChartType('line')">Line Chart</button>
+                            <button class="chart-toggle" onclick="toggleChartType('bar')">Bar Chart</button>
+                            <button class="chart-toggle" onclick="toggleChartGrouping('day')">Daily</button>
+                            <button class="chart-toggle active" onclick="toggleChartGrouping('week')">Weekly</button>
+                            <button class="chart-toggle" onclick="toggleChartGrouping('month')">Monthly</button>
+                        </div>
+                        <div class="chart-container">
+                            <canvas id="growthChart"></canvas>
+                        </div>
+                    </div>
+
+                    <!-- Subscriber Count Snapshots Section (Growth Tab Copy) -->
+                    <div class="data-section" id="growthSubscriberSnapshotsSection">
+                        <h2>Subscriber Count Snapshots by Region</h2>
+                        <div class="table-controls">
+                            <div class="view-toggle">
+                                <button class="view-btn" data-view="chart" onclick="toggleGrowthSubscriberSnapshotView('chart')">Doughnut</button>
+                                <button class="view-btn" data-view="bar" onclick="toggleGrowthSubscriberSnapshotView('bar')">Bar Chart</button>
+                                <button class="view-btn active" data-view="stacked" onclick="toggleGrowthSubscriberSnapshotView('stacked')">Stacked Bar</button>
+                                <button class="view-btn" data-view="table" onclick="toggleGrowthSubscriberSnapshotView('table')">Table View</button>
+                                <button class="view-btn" data-view="historical" onclick="toggleGrowthSubscriberSnapshotView('historical')">Historical Data</button>
+                            </div>
+                            <div class="pagination d-none" id="growthSubscriberPagination">
+                                <span class="pagination-info" id="growthSubscriberPageInfo">Page 1 of 1</span>
+                                <div class="pagination-controls" id="growthSubscriberPageControls"></div>
+                            </div>
+                        </div>
+                        <div class="chart-container" id="growthSubscriberSnapshotChartContainer">
+                            <canvas id="growthSubscriberSnapshotChart"></canvas>
+                            <div class="no-data d-none" id="growthSubscriberSnapshotChartEmpty">No data available for selected filters</div>
+                        </div>
+                        <div class="table-container d-none" id="growthSubscriberTableContainer">
+                            <div id="growthSubscriberTableBody"></div>
+                        </div>
+                    </div>
+
+                    <!-- Primary Trade Distribution Section (Growth Tab Copy) -->
+                    <div class="data-section" id="growthTradeDistributionSection">
+                        <h2 id="growthTradeDistributionTitle">Primary Trade Distribution</h2>
+                        <div class="table-controls">
+                            <div class="view-toggle">
+                                <button class="view-btn active" data-view="chart" onclick="toggleGrowthTradeSnapshotView('chart')">Doughnut</button>
+                                <button class="view-btn" data-view="bar" onclick="toggleGrowthTradeSnapshotView('bar')">Bar Chart</button>
+                                <button class="view-btn" data-view="stacked" onclick="toggleGrowthTradeSnapshotView('stacked')">Stacked Bar</button>
+                                <button class="view-btn" data-view="table" onclick="toggleGrowthTradeSnapshotView('table')">Table View</button>
+                                <button class="view-btn" data-view="historical" onclick="toggleGrowthTradeSnapshotView('historical')">Historical Data</button>
+                            </div>
+                            <div class="pagination d-none" id="growthTradePagination">
+                                <span class="pagination-info" id="growthTradePageInfo">Page 1 of 1</span>
+                                <div class="pagination-controls" id="growthTradePageControls"></div>
+                            </div>
+                        </div>
+                        <div class="chart-container" id="growthTradeSnapshotChartContainer">
+                            <canvas id="growthTradeSnapshotChart"></canvas>
+                            <div class="no-data d-none" id="growthTradeSnapshotChartEmpty">No data available for selected filters</div>
+                        </div>
+                        <div class="table-container d-none" id="growthTradeTableContainer">
+                            <div id="growthTradeTableBody"></div>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- SIGNUP SOURCES TAB -->
+                <div class="tab-pane" id="signups-tab">
+                    <!-- SIGNUP PERFORMANCE SECTION -->
+                    <div class="signup-performance-section" id="signupPerformanceSection">
+                        <h2>Signup Source Performance</h2>
+                        <div id="signupSnapshotDate" class="text-dark fst-italic d-block bg-light fw-medium border-start border-danger border-3 p-2 my-3" style="min-height: 20px;"></div>
+                        
+                        <!-- Filters -->
+                        <div class="signup-filters">
+                            <div class="signup-filter-group">
+                                <label for="signupSearchInput">Search Identifier</label>
+                                <input type="text" id="signupSearchInput" placeholder="Search by signup identifier..." oninput="debouncedFilterSignupPerformance()">
+                            </div>
+                            <div class="signup-filter-group">
+                                <label for="signupMinSends">Min Sends</label>
+                                <input type="number" id="signupMinSends" placeholder="Min sends..." value="0" oninput="debouncedFilterSignupPerformance()">
+                            </div>
+                        </div>
+
+                        <!-- Top Signup Sources by New Subscribers chart -->
+                        <div class="signup-chart-section" id="signupNewSubscribersChartContainer" style="margin-bottom: 1.5rem;">
+                            <div style="position: relative; height: 400px;">
+                                <canvas id="signupNewSubscribersChart"></canvas>
+                            </div>
+                        </div>
+
+                        <!-- Data Table -->
+                        <div class="signup-table-container">
+                            <table class="signup-table">
+                                <thead>
+                                    <tr>
+                                        <th class="sortable resizable"><span onclick="sortSignupTable('signupIdentifier')">Signup Identifier</span><div class="resize-handle" onmousedown="initColumnResize(event)"></div></th>
+                                        <th class="sortable" onclick="sortSignupTable('totalNewSubscribers')">New Subscribers</th>
+                                        <th class="sortable" onclick="sortSignupTable('totalLifetimeSends')">Sends</th>
+                                        <th class="sortable" onclick="sortSignupTable('totalLifetimeDelivered')">Delivered</th>
+                                        <th class="sortable" onclick="sortSignupTable('lifetimeAvgDeliveryRate')">Delivery %</th>
+                                        <th class="sortable" onclick="sortSignupTable('lifetimeAvgOpenRate')">Open %</th>
+                                        <th class="sortable" onclick="sortSignupTable('lifetimeAvgCTR')">CTR %</th>
+                                        <th class="sortable" onclick="sortSignupTable('lifetimeAvgCTOR')">CTOR %</th>
+                                        <th class="sortable" onclick="sortSignupTable('lifetimeAvgBounceRate')">Bounce %</th>
+                                        <th class="sortable" onclick="sortSignupTable('lifetimeAvgUnsubscribeRate')">Unsub %</th>
+                                        <th class="sortable" onclick="sortSignupTable('monthsActive')">Months Active (Since Sep 25)</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="signupPerformanceTableBody">
+                                    <!-- Table content will be populated by JavaScript -->
+                                </tbody>
+                            </table>
+                        </div>
+
+                        <!-- Pagination -->
+                        <div class="signup-pagination">
+                            <div class="signup-pagination-info" id="signupPaginationInfo">
+                                Showing 0 of 0 signup sources
+                            </div>
+                            <div class="signup-pagination-controls">
+                                <button class="signup-pagination-btn" id="signupPrevBtn" onclick="changeSignupPage(-1)">◀ Previous</button>
+                                <button class="signup-pagination-btn" id="signupNextBtn" onclick="changeSignupPage(1)">Next ▶</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- SIGNUP SOURCE DETAIL SUB-PAGE -->
+                <div class="tab-pane" id="signup-detail-tab">
+                    <div class="signup-performance-section" id="signupDetailSection">
+                        <!-- Back link -->
+                        <a class="signup-detail-back" id="signupDetailBackLink">
+                            <i class="bi bi-arrow-left"></i> Back to Signup Sources
+                        </a>
+                        
+                        <!-- Header -->
+                        <div class="signup-detail-header">
+                            <h2 id="signupDetailTitle">Signup Source Detail</h2>
+                        </div>
+                        
+                        <!-- Snapshot date -->
+                        <div id="signupDetailSnapshotDate" class="text-dark fst-italic d-block bg-light fw-medium border-start border-danger border-3 p-2 my-3" style="min-height: 20px;"></div>
+                        
+                        <!-- Lifetime Metrics Cards -->
+                        <div class="signup-detail-metrics" id="signupDetailMetrics">
+                            <!-- Populated by JS -->
+                        </div>
+                        
+                        <!-- Regional Chart -->
+                        <div class="signup-detail-chart-section">
+                            <h3>Regional Participation</h3>
+                            <div style="position: relative; height: 400px;" id="signupDetailChartContainer">
+                                <canvas id="signupDetailRegionalChart"></canvas>
+                            </div>
+                        </div>
+                        
+                        <!-- Regional Breakdown Table -->
+                        <div class="signup-detail-table-section">
+                            <h3>Regional Breakdown</h3>
+                            <!-- Regional summary stats -->
+                            <div class="signup-regional-stats" id="signupDetailRegionalStats">
+                                <!-- Populated by JS -->
+                            </div>
+                            <table class="signup-regional-table" id="signupDetailRegionalTable">
+                                <thead>
+                                    <tr>
+                                        <th>Region</th>
+                                        <th>Participants</th>
+                                        <th>Pending DOI</th>
+                                        <th>New Contacts</th>
+                                        <th>New Contact Rate</th>
+                                        <th>% of Total</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="signupDetailRegionalTableBody">
+                                    <!-- Populated by JS -->
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- ================================================================
+                     MYACCOUNT TAB - PLACEHOLDER LAYOUT
+                     ================================================================
+                     
+                     STATUS: PLACEHOLDER - DATA NOT YET AVAILABLE
+                     Created: December 2024
+                     
+                     MyAccount Analytics - Live Data Implementation
+                     Updated: February 2026
+                     
+                     Purpose:
+                     - Display MyAccount registration analytics from live data
+                     - Show total accounts, opt-in rates, trade and region breakdowns
+                     - Provide filtering by date range and user culture
+                     
+                     Data Source: 'My Account' Data Extension
+                     Fields:
+                     - Id (primary key), IndividualId, ContactId
+                     - RegistrationDate, UserCulture, PrimaryTrade (nullable)
+                     - ConsentStatus (mapped to opted-in/not opted-in), Email
+                     
+                     ConsentStatus Mapping:
+                     - Opted-In: 'Double Opt-In Verified', 'Single Opt-In'
+                     - Not Opted-In: 'Not Opted-In', 'Withdrawn', or other values
+                     
+                     Note: ContactId is shared across regions for multi-region users
+                     Dashboard shows both Total Accounts and Unique Contacts stats
+                     
+                     ================================================================ -->
+                <div class="tab-pane" id="myaccount-tab">
+                    <!-- MYACCOUNT OVERVIEW SECTION -->
+                    <div class="myaccount-section" id="myAccountSection">
+                        <h2>MyAccount Campaign Analytics</h2>
+                        
+                        <!-- Placeholder Banner - Hidden when live data is available -->
+                        <div class="myaccount-placeholder-banner" style="display: none;">
+                            <div class="banner-icon">ℹ️</div>
+                            <div class="banner-content">
+                                <h3>No Data Available</h3>
+                                <p>No data currently available. The My Account data extension may be empty or data is still being synced.</p>
+                            </div>
+                        </div>
+                        
+                        <!-- Stats Cards -->
+                        <div class="myaccount-stats-grid" id="myAccountStatsGrid">
+                            <div class="myaccount-stat-card">
+                                <div class="myaccount-stat-value" id="myaccountTotalAccounts">-</div>
+                                <div class="myaccount-stat-label">Total Accounts</div>
+                                <div class="myaccount-stat-sublabel">All registered MyAccount users</div>
+                            </div>
+                            <div class="myaccount-stat-card highlight">
+                                <div class="myaccount-stat-value" id="myaccountOptedIn">-</div>
+                                <div class="myaccount-stat-label">Marketing Opt-In</div>
+                                <div class="myaccount-stat-sublabel">Opted-in accounts</div>
+                            </div>
+                            <div class="myaccount-stat-card secondary">
+                                <div class="myaccount-stat-value" id="myaccountRegions">-</div>
+                                <div class="myaccount-stat-label">Active Regions</div>
+                                <div class="myaccount-stat-sublabel">Cultures with registrations</div>
+                            </div>
+                            <div class="myaccount-stat-card secondary">
+                                <div class="myaccount-stat-value" id="myaccountTrades">-</div>
+                                <div class="myaccount-stat-label">Trade Categories</div>
+                                <div class="myaccount-stat-sublabel">Primary trade breakdown</div>
+                            </div>
+                        </div>
+                        
+                        <!-- Marketing Opt-In Status Bar -->
+                        <h3 style="font-size: 0.9rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 1rem; color: var(--text);">Marketing Opt-In Overview</h3>
+                        <div class="myaccount-optin-bar" id="myaccountOptinBar">
+                            <div class="myaccount-optin-segment" style="width: 100%; background: #eee; color: #666;">Loading...</div>
+                        </div>
+                        <div class="myaccount-optin-legend">
+                            <div class="myaccount-optin-legend-item">
+                                <div class="myaccount-optin-legend-dot optin"></div>
+                                <span>Opted In (<span id="myaccountOptinCount">-</span>)</span>
+                            </div>
+                            <div class="myaccount-optin-legend-item">
+                                <div class="myaccount-optin-legend-dot optout"></div>
+                                <span>Not Opted In (<span id="myaccountOptoutCount">-</span>)</span>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- GROWTH OVER TIME SECTION -->
+                    <div class="myaccount-section growth" id="myAccountGrowthSection">
+                        <h2>Account Registrations Over Time</h2>
+
+                        <!-- Growth Insight Cards -->
+                        <div class="myaccount-growth-insights">
+                            <div class="myaccount-growth-card">
+                                <div class="myaccount-growth-value" id="maGrowthTotal">-</div>
+                                <div class="myaccount-growth-label">Total Accounts (Period)</div>
+                            </div>
+                            <div class="myaccount-growth-card">
+                                <div class="myaccount-growth-value" id="maGrowthPeak">-</div>
+                                <div class="myaccount-growth-label">Peak Registrations (Single Period)</div>
+                            </div>
+                            <div class="myaccount-growth-card">
+                                <div class="myaccount-growth-value" id="maGrowthAvg">-</div>
+                                <div class="myaccount-growth-label">Avg. Registrations / Period</div>
+                            </div>
+                            <div class="myaccount-growth-card">
+                                <div class="myaccount-growth-value" id="maGrowthOptinRate">-</div>
+                                <div class="myaccount-growth-label">Overall Opt-In Rate (Period)</div>
+                            </div>
+                        </div>
+
+                        <!-- Chart Controls -->
+                        <div class="myaccount-chart-controls">
+                            <button class="myaccount-chart-toggle active" onclick="toggleMAGrowthChartType('line')">Line</button>
+                            <button class="myaccount-chart-toggle" onclick="toggleMAGrowthChartType('bar')">Bar</button>
+                            <span style="margin: 0 0.25rem; color: var(--border);">|</span>
+                            <button class="myaccount-chart-toggle" onclick="toggleMAGrowthGrouping('day')">Daily</button>
+                            <button class="myaccount-chart-toggle active" onclick="toggleMAGrowthGrouping('month')">Monthly</button>
+                            <button class="myaccount-chart-toggle" onclick="toggleMAGrowthGrouping('year')">Yearly</button>
+                        </div>
+
+                        <!-- Chart -->
+                        <div class="myaccount-growth-chart-container">
+                            <canvas id="myaccountGrowthChart"></canvas>
+                        </div>
+                    </div>
+
+                    <!-- BREAKDOWN SECTION -->
+                    <div class="myaccount-section breakdown" id="myAccountBreakdownSection">
+                        <h2>Account Distribution</h2>
+                        
+                        <div class="myaccount-chart-row">
+                            <div class="myaccount-chart-card">
+                                <h4>Accounts by Primary Trade</h4>
+                                <div class="chart-wrapper">
+                                    <canvas id="myaccountTradeChart"></canvas>
+                                </div>
+                            </div>
+                            <div class="myaccount-chart-card">
+                                <h4>Accounts by Region</h4>
+                                <div class="chart-wrapper">
+                                    <canvas id="myaccountRegionChart"></canvas>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="myaccount-breakdown-grid">
+                            <!-- Trade Breakdown -->
+                            <div class="myaccount-breakdown-card">
+                                <h4>By Primary Trade</h4>
+                                <ul class="myaccount-breakdown-list" id="myaccountTradeBreakdown">
+                                    <li>Loading...</li>
+                                </ul>
+                            </div>
+                            
+                            <!-- Region Breakdown -->
+                            <div class="myaccount-breakdown-card">
+                                <h4>By Region (Top 10)</h4>
+                                <ul class="myaccount-breakdown-list" id="myaccountRegionBreakdown">
+                                    <li>Loading...</li>
+                                </ul>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- OPT-IN BREAKDOWN SECTION -->
+                    <div class="myaccount-section optin" id="myAccountOptinSection">
+                        <h2>Marketing Opt-In by Region</h2>
+                        
+                        <div class="myaccount-table-container">
+                            <table class="myaccount-table" id="myaccountOptinTable">
+                                <thead>
+                                    <tr>
+                                        <th class="sortable" onclick="sortMyAccountTable('region')">Region</th>
+                                        <th class="sortable" onclick="sortMyAccountTable('totalAccounts')">Total Accounts</th>
+                                        <th class="sortable" onclick="sortMyAccountTable('optedIn')">Opted In</th>
+                                        <th class="sortable" onclick="sortMyAccountTable('optedOut')">Not Opted In</th>
+                                        <th class="sortable" onclick="sortMyAccountTable('optinRate')">Opt-In Rate</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="myaccountOptinTableBody">
+                                    <tr>
+                                        <td colspan="5" style="text-align: center; color: #666;">Loading...</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+                
+            </div>
+        </div>
+
+        <!-- CULTURE-SPECIFIC VIEW -->
+    </div>
+
+    </div><!-- End container -->
+
+    
+    <!-- Tab Management JavaScript -->
+    <!-- The two inline application <script> blocks that previously lived here and
+         after the tab panes were extracted to the dashboard-app Code Resource,
+         referenced from <head> with defer. -->
+    
+    <!-- Bootstrap JS with defer for better page load performance -->
+</body>
+</html>
