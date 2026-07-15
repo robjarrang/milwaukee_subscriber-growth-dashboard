@@ -671,6 +671,10 @@
             gap: 0.5rem;
         }
 
+        .trade-level-toggle {
+            margin-bottom: 0.75rem;
+        }
+
         .view-btn {
             background: var(--milwaukee-white);
             border: 2px solid var(--border);
@@ -3649,4 +3653,79 @@
 
         body.in-iframe .container.mt-4 {
             margin-top: 1rem !important;
+        }
+
+        /* ==================================================================
+           == IMPROVEMENTS ROUND (7 July 2026)                             ==
+           ================================================================== */
+
+        /* (IMPROVEMENT 3) "Data as of" caption on the Overview headline card */
+        .data-as-of {
+            font-size: 12px;
+            color: #888;
+            margin-top: 4px;
+        }
+
+        /* (IMPROVEMENT 5) Region dropdown search box */
+        .region-filter-tools {
+            padding: 8px;
+            border-bottom: 1px solid #e8e8e8;
+            position: sticky;
+            top: 0;
+            background: #fff;
+            z-index: 2;
+        }
+        .region-filter-search {
+            width: 100%;
+            padding: 4px 8px;
+            font-size: 13px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            box-sizing: border-box;
+        }
+
+        /* (IMPROVEMENT 8) Sticky table headers. The wrappers previously only
+           scrolled horizontally; a bounded height with vertical scrolling is
+           required for position: sticky to have a scroll container to stick
+           within. Header cells keep their opaque Milwaukee-grey background
+           from the existing thead rules. */
+        .campaign-table-container,
+        .signup-table-container {
+            max-height: 70vh;
+            overflow-y: auto;
+        }
+        .campaign-table-container thead th,
+        .signup-table-container thead th {
+            position: sticky;
+            top: 0;
+            z-index: 3;
+            box-shadow: 0 1px 0 #e8e8e8; /* keeps the header/body divider visible while stuck */
+        }
+
+        /* (IMPROVEMENT 9) Print stylesheet: hide interactive chrome, unclip
+           the tables, keep cards and charts on one page each. Both the main
+           navbar and the tab bar are <nav> elements. */
+        @media print {
+            nav, .mobile-tab-dropdown, .global-filters, .campaign-filters,
+            .signup-filters, .chart-controls, .region-filter-container,
+            #infoBox, button, .no-print { display: none !important; }
+            body { background: #fff !important; }
+            .campaign-table-container, .signup-table-container,
+            .table-container, .email-table-container {
+                max-height: none !important;
+                overflow: visible !important;
+            }
+            table { font-size: 11px; }
+            tr, .stat-card, .chart-section { break-inside: avoid; }
+            .chart-section canvas { max-width: 100% !important; }
+        }
+
+        /* (CONSOLIDATION) Hint pointing users to the global filter bar after the
+           campaigns tab's duplicate date/region controls were removed */
+        .filter-hint-text {
+            display: inline-block;
+            font-size: 12px;
+            color: #999;
+            font-style: italic;
+            padding: 6px 0;
         }

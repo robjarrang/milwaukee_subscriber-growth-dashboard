@@ -161,3 +161,107 @@ Systematic sweep of charts, tables, search and filters. Ordered by impact; all f
 **B9 — Empty campaign table read "Showing 1-0 of 0".** Now shows 0-0.
 
 Also inspected and found sound: filter functions reset pagination correctly; campaign/signup sorting and page-change clamping; the region multi-select and its outside-click close; no duplicate element IDs across tab panes; the chart event-annotation index mapping (consistent once keys went local); email period buttons' null-target guard; `sendFactLookbackDate` format vs input comparisons; and the campaign date filter's string comparisons (timezone-free by design after the `sendDateISO` change).
+
+---
+
+## Round 3 — UX improvements implemented (7 July 2026)
+
+All nine items from `IMPROVEMENTS.md` are now implemented. Changes touch `dashboard-app.js`, `dashboard-styles.css` and the dashboard page; the loader is unchanged apart from the `@assetVersion` bump. **Deploy:** republish both Code Resources, then both pages (`@assetVersion` is now `20260707.1` on each).
+
+1. **Global filters persist across tabs** — saved to `sessionStorage` on every `applyGlobalFilters()` and restored at the end of `initializeGlobalFilters()`. The trade value is preserved when saving from tabs whose trade dropdown is unpopulated. Verified with a stubbed-DOM harness: save, cross-tab preservation, restore, and the empty-storage path.
+2. **CSV export** — `Export CSV` buttons on the Campaigns and Signups tabs export the *filtered, sorted* datasets (all pages) with Excel-safe quoting, a UTF-8 BOM and CRLF endings; filenames are date-stamped. Escaping verified in the harness (commas, doubled quotes, embedded newlines).
+3. **Overview headline context** — the Total Subscribers card now shows "as of <date>" plus a coloured delta versus ~7 days earlier, reusing `formatStatComparison` and the existing `.stat-comparison` styling. The comparison helper skips gaps correctly and returns no badge when the filtered window is shorter than 7 days (harness-tested under BST, CDT and UTC).
+4. **Double-highlighted grouping buttons fixed** — the init block that force-activated "Daily" is deleted; the HTML's default `active` classes (Line + Weekly) match the JS defaults.
+5. **Region dropdown search** — a sticky type-to-filter box now sits above the region groups in both the global and campaign dropdowns; matching groups auto-expand while searching. *Amendment to the spec:* the planned Select all/Clear links were **not** added — the dropdown header already provides Select All/Clear All buttons (`selectAllRegions`/`clearAllRegions`, which also handle indeterminate group states), so duplicating them would have cluttered the control.
+6. **Growth chart PNG download** — a `Download PNG` button in the chart controls exports the current chart onto a white background, filename stamped with grouping and date.
+7. **Empty-state recovery** — both tables' "no results" rows now include a working *clear filters* link; a new `clearSignupFilters()` resets the signup search and min-sends controls.
+8. **Sticky table headers** — the campaign and signup table wrappers are capped at `70vh` with vertical scrolling so the Milwaukee-grey header rows pin while scrolling. Print CSS removes the cap so nothing is clipped on paper.
+9. **Print stylesheet** — *simplification to the spec:* both the navbar and tab bar are `<nav>` elements and the filter blocks already carry classes (`.global-filters`, `.campaign-filters`, `.signup-filters`), so printing is handled almost entirely by CSS selectors; only the test-sends toggle row needed a `no-print` class. Print output hides all interactive chrome, unclips tables, and keeps stat cards/charts from splitting across pages.
+
+**Post-deploy checks:** set filters on Overview → open Growth (filters persist); Campaigns → Export CSV with a filter and sort applied → open in Excel; Overview headline shows the as-of date and a delta badge; Growth tab loads with exactly one grouping button lit; type in the region dropdown search; download the growth chart PNG; empty a table via search and use the clear-filters link; scroll a long table (header pins); Ctrl+P on Campaigns.
+
+---
+
+## Round 4 — Campaigns filter consolidation (7 July 2026)
+
+**Finding:** the Campaigns tab carried its own date range and region multi-select alongside the global filter bar — and the bar's date/region settings had *no effect* on the campaigns table at all. The bridging variable (`campaignDataAfterGlobalFilters`) was declared and read but never populated by `applyGlobalFilters()`, so the black bar sat above the table implying control it didn't have, while the tab-local set did the actual filtering. Had the bridge been wired, the two sets would have compounded (two intersecting date ranges) — confusing either way.
+
+**Change:** the global filter bar is now the single source of date and region filtering for campaigns. `filterCampaigns()` reads `global-date-from`/`global-date-to` and `getSelectedRegions('global')` directly; the tab keeps only its genuinely campaign-specific controls — the search box and the hide-test-sends toggle (renamed button: "Clear Search"). The duplicate region dropdown and date inputs are removed from the markup, along with the vestigial bridge variable, the dead legacy `#campaignRegionFilter` population block, and the `initializeRegionFilter('campaign')` call. A muted hint ("Dates & regions are set in the filter bar above") marks where the old controls were, and the lookback warning banner now names the global *Date From* control.
+
+**New: global Reset button.** With the bar carrying real weight, it needed a one-click reset — previously there was no way to clear it. `resetGlobalFilters()` clears the persisted sessionStorage state first (so the cross-tab trade-preservation rule can't resurrect an old trade), empties both dates and the trade select, then reuses `clearAllRegions('global')`, which updates the label and auto-applies.
+
+**Behavioural changes to flag to Milwaukee:**
+1. The campaigns table no longer defaults to a 30-day view — it shows the full loaded window (`?campaignDays`, default 90 days) unless the global dates narrow it. Pagination absorbs the extra rows.
+2. Global date/region filters now genuinely filter the campaigns table (they previously did nothing there), and via Round 3's persistence they follow the user across tabs.
+
+**Verification:** zero leftover references to the removed controls (the two remaining name matches are explanatory comments); all handlers resolve; no duplicate functions; syntax clean; and a stubbed-DOM harness runs the real rewired `filterCampaigns()` end-to-end — search + global region + global dates + test-toggle intersecting to the correct row, page reset, and the empty-filter case.
+
+**Post-deploy checks:** set global dates/region on Overview → open Campaigns (table reflects them); search within that subset; Clear Search restores the subset, not the whole table; Reset in the bar clears everything on every tab; the lookback banner appears when global Date From predates the loaded window.
+
+---
+
+## Round 5 — Stale-tab filter resurrection fix (7 July 2026)
+
+**Reported:** set filters → switch tab → Reset → return to a previously visited tab → the old filters reappear.
+
+**Cause:** previously visited tabs are live iframes held in the loader's pool. Their filter controls sat frozen with the old values — nothing told them a sibling iframe had changed the shared sessionStorage state — and any interaction on the stale tab re-ran `applyGlobalFilters()`, which saved those stale DOM values straight back over the user's reset.
+
+**Fix:** cross-iframe synchronisation via the browser's `storage` event, which fires in every same-origin context *except* the one that made the change — so hidden pool iframes reconcile the instant a sibling saves or resets. `handleGlobalFilterStorageEvent()` parses the new state (a removed key or malformed value counts as a reset), runs the new `syncGlobalFilterControls()` — a full reconcile that also *unticks* regions no longer in the state and recomputes group-header checked/indeterminate states — then re-applies with a new `skipSave` flag on `applyGlobalFilters()` so frames can't echo events at each other (identical `setItem` writes also fire no event, a second guard). `restoreGlobalFilterState()` was refactored onto the same reconciler, which incidentally fixes Round 3's noted cosmetic limitation: group-header checkboxes now reflect restored selections at init.
+
+**Verification:** sixteen harness assertions against the real extracted functions, including the reported scenario step by step — save on tab A, reset event from tab B, stale date/region/trade/group all cleared, re-apply with `skipSave=true`, and a subsequent save from tab A writing clean state (no resurrection). Update propagation, irrelevant-key and malformed-JSON robustness, and the restore paths are also covered. Structural checks clean; `@assetVersion` is `20260707.3`.
+
+**Post-deploy checks:** set filters on Overview → open Growth → Reset → return to Overview (controls clear, data unfiltered); change a filter on Growth → return to Overview (controls match); after returning to a synced tab, confirm charts are sized correctly (they re-render while the iframe is hidden; Chart.js's responsive resize should handle it — flag if not).
+
+---
+
+## Round 6 — Loader & skeleton UX (7 July 2026)
+
+Loader-only changes (`subscriber-growth-loader.html`); the dashboard page and Code Resources are untouched, so **no `@assetVersion` bump is needed** — just republish the loader CloudPage. The existing loader was already strong (content-shaped skeleton, per-switch skeletons with synced tab indicators, 45s timeout with retry, `history.replaceState` URL tracking), so this round targets the genuine gaps:
+
+1. **Idle prefetch of likely-next tabs.** After the initial tab loads and the browser is idle, the loader quietly fetches the tabs in `PREFETCH_TABS` (default `['growth', 'campaigns']`) one at a time — serialised, so at most one extra server-side render is in flight, each spaced by 500ms. A prefetched tab's first visit is instant instead of a 2–6s skeleton. **Trade-off to monitor:** up to two extra SSJS renders per session; set `PREFETCH_TABS = []` to disable, or reorder to match real usage.
+2. **Pool-registration fix (latent bug).** `attachLoadHandler` only registered a frame into the cache when it was the currently awaited tab — prefetched frames would have been orphaned and duplicated on later switches. Frames now always register on load.
+3. **Prefetch adoption.** Switching to a tab whose prefetch is still in flight adopts the existing iframe (skeleton shows until its load event) rather than creating a duplicate; the `tabReload` path evicts in-flight frames too.
+4. **LRU pool cap (`MAX_POOL = 5`).** Registering a frame beyond the cap evicts the least-recently-viewed hidden tab (never the active or pending one), bounding memory across long sessions. Decision logic covered by a three-case harness.
+5. **"Loading <tab>…" label** in the skeleton, set for the initial load and every switch/reload, hidden in the error state and restored on retry.
+6. **Session-expiry warning.** A dismissible banner appears 5 minutes before the 1-hour session key lapses (`SESSION_TTL_MS` mirrors the AMPscript `DateAdd(Now(), 1, "H")` — keep them in step if the TTL ever changes), telling the user the next tab they open will sign them back in.
+7. **`prefers-reduced-motion` support:** skeleton pulse, progress bar and fades are disabled for users with that preference set.
+
+**Verification:** the main IIFE parses cleanly; zero un-labelled `showSkeleton()` calls remain; AMPscript block balance unchanged (27/27); LRU decision harness passes (evicts least-recently-viewed, never active/pending, treats missing timestamps as oldest).
+
+**Post-deploy checks:** load the dashboard, wait a few seconds idle, then click Growth — it should appear instantly (prefetched) with correctly sized charts; click Campaigns mid-load of another tab and confirm no duplicate frames (DevTools: one iframe per `data-tab`); leave the dashboard open 55 minutes and confirm the banner appears and dismisses; enable reduced motion in the OS and confirm the skeleton is static.
+
+---
+
+## Round 6 — Loader/skeleton UX audit and improvements (7 July 2026)
+
+**Audit finding first:** the loader was already in strong shape — LRU iframe-pool eviction (`MAX_POOL = 5`), serialised idle prefetch of Growth and Campaigns, per-tab skeletons with named "Loading Growth Trends…" labels, a 45-second load watchdog with retry, `prefers-reduced-motion` handling on the shimmer, and URL/history sync all existed. Five genuine gaps were found and closed (one of them an outright bug):
+
+1. **Graceful session-expiry handling.** Previously, opening a not-yet-cached tab after the 1-hour key lapsed created a doomed iframe whose buster yanked the whole window to sign-in with the tab context lost. Now `sessionExpired()` (treated 60 s early to cover clock skew and in-flight requests) guards all three fresh-load paths (`tabReload`, `signup-detail`, first-visit); instead of the doomed iframe, `refreshSession(tab)` performs a clean top-level navigation to the loader with `?tab=` preserved (stripping any stale `code`/`source` params), so SSO runs and the user lands back on the tab they wanted. Cached tabs remain usable after expiry (no server call needed), and an adopted in-flight prefetch is left alone (its request began pre-expiry). The 55-minute warning banner gains a **Sign back in now** button and truthful copy.
+2. **Chart-resize nudge on cached-tab re-show — closes Round 5's caveat.** `showCachedTab()` now posts `{ type: 'tabShown' }` into the re-shown iframe; the dashboard listens (with an origin check) and dispatches a window `resize`, so charts re-rendered while hidden by the cross-tab filter sync recalculate their dimensions the moment the tab is visible.
+3. **Retry-path bug fixed.** A frame that never fired its load event was never registered in `loadedTabs`, so `retryLoad()` missed it and reloaded the *initial* frame instead — with `pendingTab` still pointing at the failed tab, the skeleton could never dismiss and the error simply recurred. Retry now targets the failed frame via `frameForTab()`, which finds loading frames too.
+4. **Window title reflects the active tab** ("Growth Trends – Milwaukee Subscriber Dashboard") for history entries, bookmarks and multi-window use.
+5. **postMessage hardening.** The dashboard's three `tabSwitch` posts now target `window.location.origin` instead of `'*'`, and the new `tabShown` listener checks `e.origin`.
+
+**Verification:** every loader script block parses (the 437-line main IIFE included); eight harness assertions cover the session helpers — the 60-second early-expiry boundary, tab preservation, spent-`code`/`source` stripping, path stability, and the banner's no-argument fallback to the active tab. Dashboard checks clean; zero `'*'` message targets remain. `@assetVersion` is `20260707.4` — republish the JS Code Resource and both pages (the loader itself changed this round).
+
+**Post-deploy checks:** leave the dashboard idle ~55 min → banner appears; **Sign back in now** returns to the same tab after SSO; after 1 h, clicking an unvisited tab re-authenticates and lands on that tab (no jarring bust); change filters on one tab, return to a cached tab → charts correctly sized; kill the connection and open a new tab → error state → Retry reloads *that* tab; browser title follows the active tab.
+
+---
+
+## Round 7 — Skeleton and tab-reveal rework (7 July 2026)
+
+**Reported:** loading feels clunky — skeleton animations apparently gone, and each tab shows a flash of a mis-shapen table before the correct content appears.
+
+**Root cause, honestly:** pooled and prefetched iframes were hidden with `display:none`, which gives them **zero dimensions** — so charts and layout rendered inside them (prefetch loads, and Round 5's cross-tab filter re-renders) were built at 0×0 and visibly snapped into shape at the instant the tab was swapped in. Two of this week's changes amplified a latent issue: Round 5 made hidden re-renders routine, and the Round 1 Code Resource extraction made iframe `load` fire much earlier (fewer bytes), letting the reveal race the dashboard's internal 100 ms chart-init timers on first loads too. The "skeleton removed" perception has two parts: prefetch means Growth/Campaigns now swap in instantly with no skeleton *by design* (previously janky, now correct), and under OS **Reduce Motion** the old CSS set `animation: none` on both the shimmer and the progress bar — a completely static grey page, indistinguishable from a hang. *(Worth checking whether Reduce Motion is enabled on the machine that felt broken.)*
+
+**Fixes (skeleton best practice applied):**
+1. **Visibility-stacked frames.** Pooled iframes are now absolutely stacked and hidden with `visibility: hidden` instead of `display: none`, so hidden frames keep full layout and every background render is pixel-correct before it's shown. Cached/prefetched swaps are instant *and* correct — the flash is gone at the root.
+2. **Content-driven reveal.** The dashboard posts `tabReady` once its initial render settles (180 ms after init, clearing the internal chart timers); the loader reveals on that signal rather than the raw iframe `load` event, with a 1.5 s post-load fallback (older cached app JS, script errors) and the 45 s watchdog unchanged. A half-initialised page can never be shown.
+3. **Minimum skeleton time.** `MIN_SKELETON_MS = 400` prevents sub-100 ms skeleton flickers on fast loads; the reveal defers by the residual. Reveal sequencing is guarded against double signals (tabReady + fallback racing).
+4. **Reveal-time resize nudge.** The initial frame still loads while the whole container is `display:none`, so `showDashboard()` posts `tabShown` to the revealed frame — any residual chart correction lands under cover of the 300 ms skeleton crossfade.
+5. **Reduced motion now reduces rather than removes.** A vestibular-safe `gentlePulse` opacity breathe replaces the shimmer and progress-bar animation under `prefers-reduced-motion`, so loading feedback stays alive without translation or background sweep.
+6. Loader message listener gained an origin check covering all message types.
+
+**Verification:** all loader script blocks parse (main IIFE now 497 lines); ten harness assertions on the real reveal machinery — delay maths, single-reveal guarantee, fallback clearing, late-duplicate no-op, minimum-time enforcement, and the tabReady/fallback race. Structural checks: zero `display` toggles left in the pool code, sender/receiver pairs present, origin checks on both sides. `@assetVersion` is `20260707.5` — republish the JS Code Resource and **both pages** (the loader changed).
+
+**Post-deploy checks:** first load shows the animated skeleton for at least ~400 ms and crossfades to a fully formed page (no chart snap); switching to a prefetched tab (Growth/Campaigns) is instant with correctly sized charts; change a filter, visit another cached tab → correct immediately; with OS Reduce Motion enabled, the skeleton gently pulses rather than sitting static; throttle the network → skeleton persists with the named label, error state at 45 s, Retry recovers the same tab.

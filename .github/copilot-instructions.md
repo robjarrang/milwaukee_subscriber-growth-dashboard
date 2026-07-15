@@ -75,7 +75,7 @@ if (activeTab == "overview") {
 
 ### Section A: Dashboard Data Sources (Local DEs)
 - **A.1** `Audience_Daily_Snapshot` - Daily subscriber counts by region
-- **A.2** `Audience_L1_Trade_Snapshot` - Trade distribution by region
+- **A.2** `L1_Trade_Daily_Snapshot` - Trade distribution by region
 - **A.3** `Regional_Email_Metrics` - Monthly aggregated email performance
 - **A.4** `SendFact` - Individual campaign send data
 - **A.5** `Signup_Performance` - Regional signup metrics

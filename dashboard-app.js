@@ -499,6 +499,31 @@
             }
         }
 
+        // Returns the filtered trade dataset for the currently selected Trade
+        // Distribution level: L2 (secondary) or L1 (primary, default).
+        function getActiveTradeData() {
+            return tradeSnapshotLevel === 'L2' ? filteredTradeDataL2 : filteredTradeData;
+        }
+
+        // Switch the Trade Distribution section between Primary (L1) and Secondary (L2)
+        // trade taxonomies, then re-render the visible chart/table for that section.
+        function setTradeSnapshotLevel(level) {
+            if (level !== 'L1' && level !== 'L2') return;
+            tradeSnapshotLevel = level;
+
+            // Sync the Primary/Secondary toggle buttons in both trade sections.
+            document.querySelectorAll('.trade-level-btn[data-level]').forEach(btn => {
+                btn.classList.toggle('active', btn.getAttribute('data-level') === level);
+            });
+
+            // Re-render the trade distribution charts and tables with the new source.
+            const latestTradeSnapshotData = getLatestSnapshot(getActiveTradeData(), 'trade');
+            renderTradeSnapshotChart(latestTradeSnapshotData);
+            renderGrowthTradeSnapshotChart(latestTradeSnapshotData);
+            renderTradeTable();
+            renderGrowthTradeTable();
+        }
+
         function renderTradeSnapshotChart(snapshotData) {
             const chartCanvas = DOM.tradeSnapshotChart || document.getElementById('tradeSnapshotChart');
             const chartContainer = DOM.tradeSnapshotChartContainer || document.getElementById('tradeSnapshotChartContainer');
@@ -558,9 +583,10 @@
             // Update section title based on filter mode
             const titleEl = document.getElementById('tradeDistributionTitle');
             if (titleEl) {
+                const baseTradeTitle = tradeSnapshotLevel === 'L2' ? 'Secondary Trade Distribution' : 'Primary Trade Distribution';
                 titleEl.textContent = isSingleTradeFilter
                     ? 'Regional Distribution: ' + uniqueTrades[0].replace(/_/g, ' ')
-                    : 'Primary Trade Distribution';
+                    : baseTradeTitle;
             }
 
             const MAX_VISIBLE_SLICES = 15;
@@ -766,7 +792,7 @@
 
             if (mode === 'chart' || mode === 'bar' || mode === 'stacked') {
                 // Re-render chart with current mode
-                const latestSnapshotData = getLatestSnapshot(filteredTradeData, 'trade');
+                const latestSnapshotData = getLatestSnapshot(getActiveTradeData(), 'trade');
                 renderTradeSnapshotChart(latestSnapshotData);
             } else {
                 toggleTableView('trade', 'current');
@@ -997,9 +1023,10 @@
             // Update section title based on filter mode
             const titleEl = document.getElementById('growthTradeDistributionTitle');
             if (titleEl) {
+                const baseTradeTitle = tradeSnapshotLevel === 'L2' ? 'Secondary Trade Distribution' : 'Primary Trade Distribution';
                 titleEl.textContent = isSingleTradeFilter
                     ? 'Regional Distribution: ' + uniqueTrades[0].replace(/_/g, ' ')
-                    : 'Primary Trade Distribution';
+                    : baseTradeTitle;
             }
 
             const MAX_VISIBLE_SLICES = 15;
@@ -1215,7 +1242,7 @@
             }
 
             if (mode === 'chart' || mode === 'bar' || mode === 'stacked') {
-                const latestSnapshotData = getLatestSnapshot(filteredTradeData, 'trade');
+                const latestSnapshotData = getLatestSnapshot(getActiveTradeData(), 'trade');
                 renderGrowthTradeSnapshotChart(latestSnapshotData);
             } else {
                 toggleTableView('growthTrade', 'current');
@@ -1326,6 +1353,21 @@
                     trade: record.l1Trade || '',
                     count: ensureNumber(record.subscriberCount),
                     level: 'L1'
+                };
+            })
+            : [];
+
+        // Secondary (L2) trade snapshots - parsed the same way as L1 but keyed on
+        // L2SubTrade. Feeds the Trade Distribution section when the Secondary view
+        // is selected. Empty on tabs that don't load L2 data.
+        var tradeDataL2 = (typeof l2TradeData !== 'undefined' && Array.isArray(l2TradeData))
+            ? l2TradeData.map(function(record) {
+                return {
+                    date: record.snapshotDate || null,
+                    region: normalizeRegionCode(record.region),
+                    trade: record.l2SubTrade || '',
+                    count: ensureNumber(record.subscriberCount),
+                    level: 'L2'
                 };
             })
             : [];
@@ -1528,6 +1570,9 @@
         // Initialize data
     let filteredSubscriberData = [];
     let filteredTradeData = [];
+    let filteredTradeDataL2 = [];
+    // Which trade taxonomy the Trade Distribution section shows: 'L1' (primary) or 'L2' (secondary)
+    let tradeSnapshotLevel = 'L1';
     let filteredRegionalMetricsData = [];
     let filteredSendCountData = [];
         let growthChart = null;
@@ -1542,7 +1587,6 @@
         
         // Campaign details state
     let filteredCampaignData = [];
-    let campaignDataAfterGlobalFilters = [];
         let currentCampaignPage = 1;
         let campaignsPerPage = 25;
         let campaignSortColumn = 'sendDate';
@@ -1676,6 +1720,12 @@
             tradeData = [];
         }
 
+        if (typeof tradeDataL2 !== 'undefined' && tradeDataL2) {
+            filteredTradeDataL2 = [...tradeDataL2];
+        } else {
+            tradeDataL2 = [];
+        }
+
         if (typeof sendCountData !== 'undefined' && sendCountData) {
             filteredSendCountData = [...sendCountData];
         } else {
@@ -1698,14 +1748,12 @@
                 return dateB - dateA;
             });
             
-            campaignDataAfterGlobalFilters = [...campaignMetricsData];
             filteredCampaignData = [...campaignMetricsData];
             
             // Warning visibility is now driven by the user's selected date filter
             // (see updateCampaignLookbackWarning, called from filterCampaigns).
         } else {
             campaignMetricsData = [];
-            campaignDataAfterGlobalFilters = [];
             filteredCampaignData = [];
         }
 
@@ -2361,7 +2409,6 @@
             initializeGlobalFilters();
             
             // Initialize multi-select region filter for campaigns tab
-            initializeRegionFilter('campaign');
             
             // Check URL for tab parameter
             const urlParams = new URLSearchParams(window.location.search);
@@ -2389,13 +2436,6 @@
                 initializeSignupPerformance();
             }
             
-            // Set default active button for grouping
-            document.querySelectorAll('.chart-toggle').forEach(btn => {
-                if (btn.textContent.toLowerCase().includes('daily')) {
-                    btn.classList.add('active');
-                }
-            });
-            
             // PERFORMANCE: Clean up will-change after animations complete
             setTimeout(function() {
                 document.querySelectorAll('.stat-card').forEach(card => {
@@ -2416,6 +2456,25 @@
                     }
                 });
             });
+
+            // (LOADER UX R7) Tell the parent loader this tab's initial render
+            // has settled, so it reveals the iframe only once the correct pane
+            // and charts are actually painted - never a half-built page. The
+            // 180ms settle clears the internal setTimeout(100) chart inits;
+            // the loader falls back to the iframe load event if this message
+            // never arrives.
+            if (window.parent !== window) {
+                setTimeout(function() {
+                    requestAnimationFrame(function() {
+                        try {
+                            window.parent.postMessage({
+                                type: 'tabReady',
+                                tab: (typeof activeTabLoaded !== 'undefined' ? activeTabLoaded : '')
+                            }, window.location.origin);
+                        } catch (e) { /* non-fatal */ }
+                    });
+                }, 180);
+            }
         });
 
         // (BUGFIX) Timezone-safe date-key helpers.
@@ -2603,6 +2662,25 @@
             const data = sortedPeriods.map(period => dataByPeriod[period].total);
             
             return { labels, data, periods: sortedPeriods };
+        }
+
+        // (IMPROVEMENT 6) One-click PNG export of the growth chart, copied onto
+        // a white-filled canvas: the chart canvas itself is transparent, which
+        // turns black in many image viewers.
+        function downloadGrowthChartPng() {
+            const chartCanvas = document.getElementById('growthChart');
+            if (!chartCanvas || !growthChart) return;
+            const exportCanvas = document.createElement('canvas');
+            exportCanvas.width = chartCanvas.width;
+            exportCanvas.height = chartCanvas.height;
+            const ctx = exportCanvas.getContext('2d');
+            ctx.fillStyle = '#ffffff';
+            ctx.fillRect(0, 0, exportCanvas.width, exportCanvas.height);
+            ctx.drawImage(chartCanvas, 0, 0);
+            const link = document.createElement('a');
+            link.download = `subscriber-growth-${currentGrouping}-${toLocalDateKey(new Date())}.png`;
+            link.href = exportCanvas.toDataURL('image/png');
+            link.click();
         }
 
         // Chart.js plugin: vertical dashed annotation line for key events
@@ -3222,7 +3300,7 @@
         function renderTradeTable() {
             // Use cached DOM element (PERFORMANCE OPTIMIZATION)
             const tableBody = DOM.tradeTableBody || document.getElementById('tradeTableBody');
-            const latestSnapshotData = getLatestSnapshot(filteredTradeData, 'trade');
+            const latestSnapshotData = getLatestSnapshot(getActiveTradeData(), 'trade');
             let dataToRender = [];
             
             if (tradeTableView === 'current') {
@@ -3238,7 +3316,7 @@
                 // Filter by country group based on selected regions
                 const selectedRegionsList = getSelectedRegions('trade');
                 
-                let historicalData = filterTradeDataByCountryGroup(filteredTradeData, selectedRegionsList);
+                let historicalData = filterTradeDataByCountryGroup(getActiveTradeData(), selectedRegionsList);
                 
                 // If specific regions selected, further filter to just those regions
                 if (selectedRegionsList.length > 0) {
@@ -3579,7 +3657,7 @@
             const tableBody = document.getElementById('growthTradeTableBody');
             if (!tableBody) return;
             
-            const latestSnapshotData = getLatestSnapshot(filteredTradeData, 'trade');
+            const latestSnapshotData = getLatestSnapshot(getActiveTradeData(), 'trade');
             
             // Filter by selected regions
             let filteredData = latestSnapshotData;
@@ -3653,7 +3731,7 @@
                 const selectedRegionsList = getSelectedRegions('growthTrade');
                 
                 // Use country-group filtering for better performance
-                let allTradeData = filterTradeDataByCountryGroup(filteredTradeData, selectedRegionsList);
+                let allTradeData = filterTradeDataByCountryGroup(getActiveTradeData(), selectedRegionsList);
                 
                 // If specific regions selected, further filter to just those regions
                 if (selectedRegionsList.length > 0) {
@@ -3853,6 +3931,21 @@
             const totalSubscribers = latestSnapshot ? latestSnapshot.total : 0;
             const totalSubsEl = DOM.totalSubscribers || document.getElementById('totalSubscribers');
             if (totalSubsEl) totalSubsEl.textContent = totalSubscribers.toLocaleString();
+
+            // (IMPROVEMENT 3) "Data as of" caption + 7-day movement on the headline card
+            const snapshotComparison = computeSnapshotComparison(filteredSubscriberData, 7);
+            const asOfEl = document.getElementById('overviewDataAsOf');
+            if (asOfEl) {
+                asOfEl.textContent = snapshotComparison
+                    ? 'as of ' + parseLocalDateKey(snapshotComparison.latestKey).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })
+                    : '';
+            }
+            const comparisonEl = document.getElementById('totalSubscribersComparison');
+            if (comparisonEl) {
+                comparisonEl.innerHTML = (snapshotComparison && snapshotComparison.previousKey)
+                    ? formatStatComparison(snapshotComparison.latestTotal, snapshotComparison.previousTotal, snapshotComparison.daysBetween + ' days')
+                    : '';
+            }
 
             // Calculate unique regions across all data (case-insensitive to avoid double counting)
             // Exclude regions: 0, RU, WW
@@ -4163,36 +4256,11 @@
         }
 
         function initializeCampaignDetails() {
-            // Populate region filter
-            const regionFilter = document.getElementById('campaignRegionFilter');
-            if (regionFilter) {
-                const sourceData = campaignDataAfterGlobalFilters.length > 0 ? campaignDataAfterGlobalFilters : campaignMetricsData;
-                const uniqueRegions = [...new Set(sourceData.map(c => c.region))].sort();
-                regionFilter.innerHTML = '<option value="">All Regions</option>';
-                uniqueRegions.forEach(region => {
-                    const option = document.createElement('option');
-                    option.value = region;
-                    option.textContent = region;
-                    regionFilter.appendChild(option);
-                });
-            }
-
-            // Set default date range (last 30 days)
-            const today = new Date();
-            const thirtyDaysAgo = new Date(today);
-            thirtyDaysAgo.setDate(today.getDate() - 30);
-            
-            const startDateInput = document.getElementById('campaignStartDate');
-            const endDateInput = document.getElementById('campaignEndDate');
-            
-            if (startDateInput) {
-                startDateInput.value = toLocalDateKey(thirtyDaysAgo);
-            }
-            if (endDateInput) {
-                endDateInput.value = toLocalDateKey(today);
-            }
-
-            // Initial render
+            // (CONSOLIDATION) The legacy #campaignRegionFilter select and the
+            // tab-local 30-day default date range are gone: dates and regions
+            // are governed by the global filter bar, so the table shows the
+            // full loaded window (?campaignDays, default 90) unless the bar
+            // narrows it. Initial render:
             filterCampaigns();
             
             // Set initial sort indicator on Send Date column (descending)
@@ -4207,17 +4275,20 @@
         }
 
         function filterCampaigns() {
+            // (CONSOLIDATION) Dates and regions now come solely from the GLOBAL
+            // filter bar. The tab previously had its own duplicate date/region
+            // controls which compounded with the bar (two intersecting ranges),
+            // while the campaignDataAfterGlobalFilters "bridge" was never
+            // actually populated by applyGlobalFilters - so the bar appeared to
+            // apply to campaigns but did nothing. One set of controls, wired
+            // for real. Search and the test-send toggle remain tab-local.
             const searchTerm = document.getElementById('campaignSearchInput')?.value.toLowerCase() || '';
-            const selectedRegions = getSelectedRegions('campaign'); // Changed from single region
-            const startDate = document.getElementById('campaignStartDate')?.value || '';
-            const endDate = document.getElementById('campaignEndDate')?.value || '';
+            const selectedRegions = getSelectedRegions('global');
+            const startDate = document.getElementById('global-date-from')?.value || '';
+            const endDate = document.getElementById('global-date-to')?.value || '';
             const hideTestSends = document.getElementById('hideTestSends')?.checked || false;
 
-            const sourceData = Array.isArray(campaignDataAfterGlobalFilters)
-                ? campaignDataAfterGlobalFilters
-                : campaignMetricsData;
-
-            filteredCampaignData = sourceData.filter(campaign => {
+            filteredCampaignData = campaignMetricsData.filter(campaign => {
                 // Search filter
                 const matchesSearch = !searchTerm || 
                     campaign.emailName.toLowerCase().includes(searchTerm) || 
@@ -4319,6 +4390,61 @@
             renderCampaignTable();
         }
 
+        // (IMPROVEMENT 2) Generic CSV download. Exports whatever rows/columns it
+        // is given - callers pass the FILTERED arrays so the file matches the
+        // on-screen table (current filters AND current sort order, all pages).
+        // columns = [{ header: 'Send Date', value: row => row.sendDateISO }, ...]
+        function exportRowsToCsv(rows, columns, filenamePrefix) {
+            const escapeCell = (v) => {
+                const s = String(v == null ? '' : v);
+                return /[",\n\r]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+            };
+            const lines = [columns.map(c => escapeCell(c.header)).join(',')];
+            rows.forEach(row => {
+                lines.push(columns.map(c => escapeCell(c.value(row))).join(','));
+            });
+            // \uFEFF BOM so Excel opens UTF-8 correctly; CRLF line endings for Excel.
+            const blob = new Blob(['\uFEFF' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8;' });
+            const link = document.createElement('a');
+            link.href = URL.createObjectURL(blob);
+            link.download = `${filenamePrefix}-${toLocalDateKey(new Date())}.csv`;
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+            URL.revokeObjectURL(link.href);
+        }
+
+        function exportCampaignsCsv() {
+            exportRowsToCsv(filteredCampaignData, [
+                { header: 'Send Date', value: r => r.sendDateISO },
+                { header: 'Email Name', value: r => r.emailName },
+                { header: 'Subject', value: r => r.emailSubject },
+                { header: 'Region', value: r => r.region },
+                { header: 'Total Sent', value: r => r.totalSent },
+                { header: 'Delivery %', value: r => r.deliveryRate.toFixed(2) },
+                { header: 'Open %', value: r => r.openRate.toFixed(2) },
+                { header: 'Click %', value: r => r.clickRate.toFixed(2) },
+                { header: 'CTOR %', value: r => r.clickToOpenRate.toFixed(2) },
+                { header: 'Unsub %', value: r => r.unsubscribeRate.toFixed(2) }
+            ], 'milwaukee-campaigns');
+        }
+
+        function exportSignupsCsv() {
+            exportRowsToCsv(filteredSignupPerformanceData, [
+                { header: 'Signup Identifier', value: r => r.signupIdentifier },
+                { header: 'New Subscribers', value: r => r.totalNewSubscribers || 0 },
+                { header: 'Sends', value: r => r.totalLifetimeSends },
+                { header: 'Delivered', value: r => r.totalLifetimeDelivered },
+                { header: 'Delivery %', value: r => formatPercentage(r.lifetimeAvgDeliveryRate) },
+                { header: 'Open %', value: r => formatPercentage(r.lifetimeAvgOpenRate) },
+                { header: 'CTR %', value: r => formatPercentage(r.lifetimeAvgCTR) },
+                { header: 'CTOR %', value: r => formatPercentage(r.lifetimeAvgCTOR) },
+                { header: 'Bounce %', value: r => formatPercentage(r.lifetimeAvgBounceRate) },
+                { header: 'Unsub %', value: r => formatPercentage(r.lifetimeAvgUnsubscribeRate) },
+                { header: 'Months Active', value: r => r.monthsActive }
+            ], 'milwaukee-signup-sources');
+        }
+
         function getColumnDisplayName(column) {
             const displayNames = {
                 'sendDate': 'Send Date',
@@ -4349,7 +4475,7 @@
 
             // Render table rows
             if (pageData.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="10" class="campaign-no-data">No campaigns found matching your criteria</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="10" class="campaign-no-data">No campaigns match the current filters &mdash; <a href="#" onclick="clearCampaignFilters(); return false;">clear the search</a> or adjust the global filter bar above</td></tr>';
             } else {
                 // Use DocumentFragment for batch DOM insertion (PERFORMANCE OPTIMIZATION)
                 const fragment = document.createDocumentFragment();
@@ -4407,18 +4533,11 @@
         }
 
         function clearCampaignFilters() {
-            // (BUGFIX) #campaignRegionFilter no longer exists (replaced by the
-            // checkbox multi-select), so the old .value assignment threw a
-            // TypeError and the button silently did nothing beyond clearing the
-            // search box. Clear every live control and restore defaults instead.
+            // (CONSOLIDATION) Only the tab-local controls remain: the search box
+            // and the test-send toggle. Dates and regions live in the global
+            // filter bar, which has its own Reset button.
             const searchInput = document.getElementById('campaignSearchInput');
             if (searchInput) searchInput.value = '';
-            document.querySelectorAll('.campaign-region-checkbox:checked').forEach(cb => { cb.checked = false; });
-            updateRegionFilterLabel('campaign');
-            const startInput = document.getElementById('campaignStartDate');
-            if (startInput) startInput.value = '';
-            const endInput = document.getElementById('campaignEndDate');
-            if (endInput) endInput.value = '';
             // Restore the default state of the test-send toggle (checked on load)
             const hideTests = document.getElementById('hideTestSends');
             if (hideTests) hideTests.checked = true;
@@ -4494,6 +4613,15 @@
             return dateString;
         }
 
+        // (IMPROVEMENT 7) Reset the signup filters to their defaults.
+        function clearSignupFilters() {
+            const search = document.getElementById('signupSearchInput');
+            if (search) search.value = '';
+            const minSends = document.getElementById('signupMinSends');
+            if (minSends) minSends.value = 0;
+            filterSignupPerformance();
+        }
+
         function filterSignupPerformance() {
             const searchTerm = (document.getElementById('signupSearchInput').value || '').trim().toLowerCase();
             const minSends = parseInt(document.getElementById('signupMinSends').value, 10) || 0;
@@ -4543,7 +4671,7 @@
             // If inside the loader iframe, delegate to parent (iframe pool manager)
             if (window.parent !== window) {
                 try {
-                    window.parent.postMessage({ type: 'tabSwitch', tab: 'signup-detail', source: signupIdentifier }, '*');
+                    window.parent.postMessage({ type: 'tabSwitch', tab: 'signup-detail', source: signupIdentifier }, window.location.origin);
                 } catch(e) { /* Ignore cross-origin errors */ }
                 return; // Parent handles navigation
             }
@@ -4561,7 +4689,7 @@
             // If inside the loader iframe, delegate to parent (iframe pool manager)
             if (window.parent !== window) {
                 try {
-                    window.parent.postMessage({ type: 'tabSwitch', tab: 'signups' }, '*');
+                    window.parent.postMessage({ type: 'tabSwitch', tab: 'signups' }, window.location.origin);
                 } catch(e) { /* Ignore cross-origin errors */ }
                 return; // Parent handles navigation
             }
@@ -4583,7 +4711,7 @@
             renderSignupNewSubscribersChart();
             
             if (pageData.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="11" class="campaign-no-data">No signup sources match the current filters</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="11" class="campaign-no-data">No signup sources match the current filters &mdash; <a href="#" onclick="clearSignupFilters(); return false;">clear filters</a></td></tr>';
                 updateSignupPagination();
                 return;
             }
@@ -5534,7 +5662,7 @@
                 // The parent manages an iframe pool and may show a cached tab instantly.
                 if (window.parent !== window) {
                     try {
-                        window.parent.postMessage({ type: 'tabSwitch', tab: tabName }, '*');
+                        window.parent.postMessage({ type: 'tabSwitch', tab: tabName }, window.location.origin);
                     } catch(e) { /* Ignore cross-origin errors */ }
                     return; // Parent handles navigation — don't self-navigate
                 }
@@ -5585,7 +5713,7 @@
                         renderPendingContactsSection();
                         // Render overview charts
                         const latestSnapshotData = getLatestSnapshot(filteredSubscriberData, 'subscriber');
-                        const latestTradeSnapshotData = getLatestSnapshot(filteredTradeData, 'trade');
+                        const latestTradeSnapshotData = getLatestSnapshot(getActiveTradeData(), 'trade');
                         renderSubscriberSnapshotChart(latestSnapshotData);
                         renderTradeSnapshotChart(latestTradeSnapshotData);
                         // Apply filters if any are set
@@ -5618,7 +5746,7 @@
                         updateOverviewStats();
                         // Render subscriber and trade charts to Growth tab canvases
                         const latestSnapshotData = getLatestSnapshot(filteredSubscriberData, 'subscriber');
-                        const latestTradeSnapshotData = getLatestSnapshot(filteredTradeData, 'trade');
+                        const latestTradeSnapshotData = getLatestSnapshot(getActiveTradeData(), 'trade');
                         renderGrowthSubscriberSnapshotChart(latestSnapshotData);
                         renderGrowthTradeSnapshotChart(latestTradeSnapshotData);
                         // Update growth chart if exists
@@ -5846,7 +5974,41 @@
                 groupDiv.appendChild(groupItems);
                 container.appendChild(groupDiv);
             });
+
+            // (IMPROVEMENT 5) Type-to-search box, prepended above the groups.
+            // (Bulk Select All / Clear All already exist in the dropdown header
+            // via selectAllRegions/clearAllRegions, so only search is added.)
+            const tools = document.createElement('div');
+            tools.className = 'region-filter-tools';
+            tools.innerHTML = `
+                <input type="text" class="region-filter-search" placeholder="Search regions..."
+                       oninput="filterRegionDropdown('${context}', this.value)">`;
+            container.insertBefore(tools, container.firstChild);
         }
+
+        // (IMPROVEMENT 5) Type-to-filter for the region dropdown. Matches on the
+        // visible text of each region row; groups with no matches are hidden and
+        // matching groups auto-expand while a search term is present.
+        function filterRegionDropdown(context, term) {
+            const needle = (term || '').trim().toLowerCase();
+            const container = document.getElementById(`${context}-region-groups`);
+            if (!container) return;
+            container.querySelectorAll('.region-group').forEach(group => {
+                let groupHasMatch = false;
+                group.querySelectorAll(`input.${context}-region-checkbox`).forEach(cb => {
+                    // Each region checkbox sits inside a label inside its own item div
+                    const item = cb.closest('div');
+                    if (!item) return;
+                    const matches = !needle || item.textContent.toLowerCase().includes(needle);
+                    item.style.display = matches ? '' : 'none';
+                    if (matches) groupHasMatch = true;
+                });
+                group.style.display = groupHasMatch ? '' : 'none';
+                const items = group.querySelector('.region-group-items');
+                if (items && needle) items.classList.add('expanded');
+            });
+        }
+
 
         // Toggle region filter dropdown visibility
         function toggleRegionFilter(context) {
@@ -5985,6 +6147,21 @@
         }
 
         // Clear all regions
+        // (CONSOLIDATION) One-click reset for the global filter bar. Clears the
+        // persisted state FIRST so the save inside the subsequent apply cannot
+        // resurrect a trade preserved from another tab, then clears every
+        // control. clearAllRegions('global') updates the label and auto-applies.
+        function resetGlobalFilters() {
+            try { sessionStorage.removeItem(GLOBAL_FILTER_STORAGE_KEY); } catch (e) {}
+            const fromInput = document.getElementById('global-date-from');
+            if (fromInput) fromInput.value = '';
+            const toInput = document.getElementById('global-date-to');
+            if (toInput) toInput.value = '';
+            const tradeSelect = document.getElementById('global-trade');
+            if (tradeSelect) tradeSelect.value = '';
+            clearAllRegions('global');
+        }
+
         function clearAllRegions(context) {
             document.querySelectorAll(`.${context}-region-checkbox`).forEach(checkbox => {
                 checkbox.checked = false;
@@ -6041,7 +6218,10 @@
         }
 
         // Apply global filters across all tabs
-        function applyGlobalFilters() {
+        function applyGlobalFilters(skipSave) {
+            // (IMPROVEMENT 1) persist across tab iframes; the cross-iframe storage
+            // sync passes skipSave=true so frames don't echo events at each other.
+            if (!skipSave) saveGlobalFilterState();
             const dateFrom = document.getElementById('global-date-from').value;
             const dateTo = document.getElementById('global-date-to').value;
             const regions = getSelectedRegions('global');
@@ -6057,6 +6237,18 @@
             
             // Apply filters to all data
             applyGlobalDataFilters(dateFrom, dateTo, regions, trade);
+
+            // (R8) Explain empty results instead of showing silent blank charts.
+            const snapshotWindow = getSnapshotDateWindow(subscriberData);
+            if (!datesSuppressedForWindow && snapshotWindow && (dateFrom || dateTo) &&
+                dateRangeOutsideWindow(dateFrom, dateTo, snapshotWindow)) {
+                showDateWindowNotice(dateFrom, dateTo, snapshotWindow, false);
+            } else if (!datesSuppressedForWindow) {
+                hideDateWindowNotice();
+            }
+            log('Global filters applied: subscribers ' + subscriberData.length + '->' + filteredSubscriberData.length +
+                ', trade ' + tradeData.length + '->' + filteredTradeData.length +
+                (snapshotWindow ? ', window ' + snapshotWindow.min + '..' + snapshotWindow.max : ''));
             
             // Refresh all tabs with filtered data
             refreshAllTabs();
@@ -6095,6 +6287,21 @@
 
                 return include;
             });
+
+            // Filter secondary (L2) trade data - same date/region window as L1.
+            // The "Primary Trade" dropdown belongs to the L1 taxonomy, so it is not
+            // applied here (L2 subtrades won't match a selected primary trade).
+            filteredTradeDataL2 = tradeDataL2.filter(item => {
+                if (!item) return false;
+                const itemDate = parseDate(item.date);
+                let include = true;
+
+                if (fromDateObj && itemDate < fromDateObj) include = false;
+                if (toDateObj && itemDate > toDateObj) include = false;
+                if (regions && regions.length > 0 && !regions.includes(item.region)) include = false;
+
+                return include;
+            });
             
             // Filter regional metrics data (for Email Analytics)
             if (typeof regionalMetricsData !== 'undefined' && regionalMetricsData) {
@@ -6118,7 +6325,7 @@
             // Refresh Overview tab
             updateOverviewStats();
             const latestSnapshotData = getLatestSnapshot(filteredSubscriberData, 'subscriber');
-            const latestTradeSnapshotData = getLatestSnapshot(filteredTradeData, 'trade');
+            const latestTradeSnapshotData = getLatestSnapshot(getActiveTradeData(), 'trade');
             renderSubscriberSnapshotChart(latestSnapshotData);
             renderTradeSnapshotChart(latestTradeSnapshotData);
             
@@ -6141,12 +6348,200 @@
         }
 
         // Initialize global filters
+        // (IMPROVEMENT 1) Global filter persistence. Each tab is a separate
+        // iframe, so without this the "global" filter bar silently reset on
+        // every tab switch. sessionStorage is shared across same-origin
+        // iframes within the browser tab and dies with it - the right lifetime.
+        const GLOBAL_FILTER_STORAGE_KEY = 'mkeDashboardGlobalFilters';
+
+        // Reads the global filter controls straight from the DOM and saves them.
+        // Reading the DOM (rather than taking parameters) keeps this independent
+        // of variable names inside applyGlobalFilters.
+        function saveGlobalFilterState() {
+            try {
+                let previous = {};
+                try { previous = JSON.parse(sessionStorage.getItem(GLOBAL_FILTER_STORAGE_KEY)) || {}; } catch (e) {}
+                const tradeSelect = document.getElementById('global-trade');
+                // The trade dropdown is only populated on tabs that load trade data
+                // (Overview/Growth). On other tabs it contains just "All Trades", so
+                // saving its empty value would wipe a trade chosen on Overview -
+                // preserve the previously saved trade instead.
+                const tradeValue = (tradeSelect && tradeSelect.options.length > 1)
+                    ? tradeSelect.value
+                    : (previous.trade || '');
+                const state = {
+                    // (R8) While this tab has suppressed an out-of-window range,
+                    // preserve the stored dates (mirrors the trade rule above) so
+                    // saving from here doesn't wipe a range that is still valid
+                    // on tabs loading a longer snapshot history.
+                    dateFrom: datesSuppressedForWindow ? (previous.dateFrom || '')
+                        : (document.getElementById('global-date-from')?.value || ''),
+                    dateTo: datesSuppressedForWindow ? (previous.dateTo || '')
+                        : (document.getElementById('global-date-to')?.value || ''),
+                    regions: getSelectedRegions('global'),
+                    trade: tradeValue
+                };
+                sessionStorage.setItem(GLOBAL_FILTER_STORAGE_KEY, JSON.stringify(state));
+            } catch (e) { /* storage unavailable - filters simply won't persist */ }
+        }
+
+        // (STALE-TAB FIX) Reconciles every global filter control to the given
+        // state - including UNticking regions the state no longer contains and
+        // recomputing the group-header checkbox/indeterminate states. Passing
+        // null resets the controls to their defaults. Used both at init and by
+        // the cross-iframe storage sync below.
+        function syncGlobalFilterControls(state) {
+            const s = state || {};
+            const fromInput = document.getElementById('global-date-from');
+            if (fromInput) fromInput.value = s.dateFrom || '';
+            const toInput = document.getElementById('global-date-to');
+            if (toInput) toInput.value = s.dateTo || '';
+            const savedRegions = Array.isArray(s.regions) ? s.regions : [];
+            document.querySelectorAll('.global-region-checkbox').forEach(cb => {
+                cb.checked = savedRegions.includes(cb.value);
+            });
+            Object.keys(regionGroups).forEach(groupKey => {
+                updateGroupCheckboxState('global', groupKey);
+            });
+            updateRegionFilterLabel('global');
+            const tradeSelect = document.getElementById('global-trade');
+            if (tradeSelect) {
+                const wanted = s.trade || '';
+                const hasOption = Array.from(tradeSelect.options).some(o => o.value === wanted);
+                // Unpopulated trade selects (tabs without trade data) fall back
+                // to '' - the saved trade itself is preserved by the save rule.
+                tradeSelect.value = hasOption ? wanted : '';
+            }
+        }
+
+        // (R8) Snapshot-window helpers. Overview loads 60 days of snapshots and
+        // Growth 200, so a persisted date range that was valid on one tab (or
+        // set weeks ago in a long-lived browser tab) can lie entirely outside
+        // the window loaded on another - filtering EVERYTHING to zero with no
+        // explanation. These make that state impossible to reach silently.
+        let datesSuppressedForWindow = false;
+
+        // Pure: the [min, max] local-date-key window of the loaded snapshot data.
+        function getSnapshotDateWindow(data) {
+            let min = null, max = null;
+            (data || []).forEach(item => {
+                if (!item || !item.date) return;
+                const key = toLocalDateKey(parseDate(item.date));
+                if (!min || key < min) min = key;
+                if (!max || key > max) max = key;
+            });
+            return (min && max) ? { min: min, max: max } : null;
+        }
+
+        // Pure: true when the range cannot intersect the window at all.
+        function dateRangeOutsideWindow(dateFrom, dateTo, window) {
+            if (!window) return false;
+            if (dateTo && dateTo < window.min) return true;   // range ends before the data begins
+            if (dateFrom && dateFrom > window.max) return true; // range starts after the data ends
+            return false;
+        }
+
+        function showDateWindowNotice(dateFrom, dateTo, window, wasCleared) {
+            const notice = document.getElementById('globalDateWindowNotice');
+            if (!notice) return;
+            const textEl = document.getElementById('globalDateWindowNoticeText');
+            if (textEl) {
+                const range = (dateFrom || '…') + ' to ' + (dateTo || '…');
+                textEl.textContent = wasCleared
+                    ? 'A remembered date filter (' + range + ') was outside the snapshot data loaded on this tab (' +
+                      window.min + ' to ' + window.max + ') and has been cleared here. It still applies on tabs that load a longer history.'
+                    : 'Your global date range (' + range + ') is outside the snapshot data loaded on this tab (' +
+                      window.min + ' to ' + window.max + '), so these charts have nothing to show. Widen the range, Reset, or reload with ?snapshotDays= for more history.';
+            }
+            notice.style.display = 'block';
+        }
+
+        function hideDateWindowNotice() {
+            const notice = document.getElementById('globalDateWindowNotice');
+            if (notice) notice.style.display = 'none';
+        }
+
+        // (R8) Called after RESTORING or SYNCING persisted state - never after
+        // the user types dates by hand. If the remembered range cannot match
+        // any loaded snapshot day on THIS tab, don't apply it here: clear the
+        // inputs, flag suppression (so saves preserve the stored dates for the
+        // tabs where they remain valid), and explain what happened.
+        function enforceDateWindowGuard() {
+            datesSuppressedForWindow = false;
+            const window = getSnapshotDateWindow(typeof subscriberData !== 'undefined' ? subscriberData : []);
+            if (!window) return; // no snapshot data on this tab - nothing to guard
+            const fromInput = document.getElementById('global-date-from');
+            const toInput = document.getElementById('global-date-to');
+            const from = fromInput ? fromInput.value : '';
+            const to = toInput ? toInput.value : '';
+            if (dateRangeOutsideWindow(from, to, window)) {
+                if (fromInput) fromInput.value = '';
+                if (toInput) toInput.value = '';
+                datesSuppressedForWindow = true;
+                showDateWindowNotice(from, to, window, true);
+            }
+        }
+
+        // Restores saved state into the controls. Returns true if anything was restored.
+        function restoreGlobalFilterState() {
+            try {
+                const raw = sessionStorage.getItem(GLOBAL_FILTER_STORAGE_KEY);
+                if (!raw) return false;
+                const state = JSON.parse(raw) || {};
+                const meaningful = Boolean(state.dateFrom || state.dateTo || state.trade ||
+                    (Array.isArray(state.regions) && state.regions.length > 0));
+                if (!meaningful) return false;
+                syncGlobalFilterControls(state);
+                return true;
+            } catch (e) { return false; }
+        }
+
+        // (STALE-TAB FIX) Handles a sessionStorage change made by ANOTHER tab
+        // iframe. Without this, a previously visited tab keeps its old filter
+        // values frozen in its DOM after the user clears or changes filters
+        // elsewhere - and any interaction there re-saves the stale values,
+        // resurrecting filters the user had reset. The browser fires the
+        // storage event in every same-origin context EXCEPT the one that made
+        // the change, so hidden pool iframes reconcile the moment it happens.
+        // Re-applying with skipSave=true prevents an event echo between frames.
+        function handleGlobalFilterStorageEvent(e) {
+            if (e.key !== GLOBAL_FILTER_STORAGE_KEY && e.key !== null) return; // null = storage cleared
+            let state = null;
+            try { state = e.newValue ? JSON.parse(e.newValue) : null; } catch (err) { state = null; }
+            syncGlobalFilterControls(state);
+            enforceDateWindowGuard(); // (R8) re-guard after cross-tab sync
+            applyGlobalFilters(true);
+        }
+        window.addEventListener('storage', handleGlobalFilterStorageEvent);
+
+        // (LOADER UX R6) The loader posts { type: 'tabShown' } into this iframe
+        // when it re-shows it from the pool. Charts may have re-rendered while
+        // the iframe was hidden (cross-tab filter sync), so nudge Chart.js to
+        // recalculate sizes now that the canvas has real dimensions again.
+        window.addEventListener('message', function(e) {
+            if (e.origin !== window.location.origin) return;
+            if (e.data && e.data.type === 'tabShown') {
+                window.dispatchEvent(new Event('resize'));
+            }
+        });
+
         function initializeGlobalFilters() {
             // Initialize the region filter dropdown
             initializeRegionFilter('global');
             
             // Populate the trade dropdown
             populateGlobalTradeDropdown();
+
+            // (IMPROVEMENT 1) Restore any filters set on another tab this session,
+            // then apply them so the initial render matches what the user last chose.
+            // (R8) The window guard runs between restore and apply: a remembered
+            // date range that cannot match this tab's loaded snapshot window is
+            // cleared here (with an explanatory notice) instead of silently
+            // blanking every chart.
+            if (restoreGlobalFilterState()) {
+                enforceDateWindowGuard();
+                applyGlobalFilters();
+            }
         }
 
         // Populate trade dropdown with available trades
@@ -6176,7 +6571,34 @@
         }
 
 
-        // Update overview statistics
+        // (IMPROVEMENT 3) Sums each snapshot day's total (non-GLOBAL regions) and
+        // returns the latest day plus the nearest day at least `daysBack` days
+        // earlier, for period-over-period comparisons on the headline card.
+        function computeSnapshotComparison(data, daysBack) {
+            const totalsByKey = {};
+            data.forEach(item => {
+                if (!item || !item.date || item.region === 'GLOBAL') return;
+                const key = toLocalDateKey(parseDate(item.date));
+                if (!totalsByKey[key]) totalsByKey[key] = {};
+                const region = item.region || '';
+                const count = item.count || 0;
+                if (!totalsByKey[key][region] || count > totalsByKey[key][region]) {
+                    totalsByKey[key][region] = count;
+                }
+            });
+            const keys = Object.keys(totalsByKey).sort((a, b) => (a < b ? 1 : a > b ? -1 : 0));
+            if (keys.length === 0) return null;
+            const sum = key => Object.values(totalsByKey[key]).reduce((s, c) => s + c, 0);
+            const latestKey = keys[0];
+            const targetDate = parseLocalDateKey(latestKey);
+            targetDate.setDate(targetDate.getDate() - daysBack);
+            const targetKey = toLocalDateKey(targetDate);
+            const previousKey = keys.find(k => k <= targetKey);
+            if (!previousKey) return { latestKey, latestTotal: sum(latestKey), previousKey: null };
+            const daysBetween = Math.round((parseLocalDateKey(latestKey) - parseLocalDateKey(previousKey)) / 86400000);
+            return { latestKey, latestTotal: sum(latestKey), previousKey, previousTotal: sum(previousKey), daysBetween };
+        }
+
         // Update overview statistics
         function updateOverviewStats() {
             log('=== UPDATE OVERVIEW STATS DEBUG ===');

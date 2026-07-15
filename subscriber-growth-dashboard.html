@@ -16,7 +16,7 @@
     
     /* IMPORTANT: Update these variables with your Installed Package details */
     SET @cloudpageURL = 'https://cloud.mail.milwaukeetool.eu/subscribergrowthloader' /* Full URL of this CloudPage */
-    SET @assetVersion = '20260706.1' /* Bump on every deploy of the CSS/JS Code Resources (cache-busting). MUST match the loader page. */
+    SET @assetVersion = '20260713.1' /* Bump on every deploy of the CSS/JS Code Resources (cache-busting). MUST match the loader page. */
     SET @baseURI = 'mcld0yjknlxks7nrt-k8rf2q7561' /* Your MC instance base URI (e.g., 'mcxxxxxxx') */
     SET @clientid = 'idstm3usgxkk9l3a67ar7emc' /* Client ID from your Installed Package */
     SET @clientsecret = 'WVt4Awgo5CKz12LETJVOIBg3' /* Client Secret from your Installed Package - ROTATE THIS: the previous value was shared in plain text */
@@ -126,6 +126,7 @@
     // Initialize variables for data storage
     var dailySnapshotJSON = "[]";
     var l1TradeJSON = "[]";
+    var l2TradeJSON = "[]";
     var regionalMetricsJSON = "[]";
     var sendFactJSON = "[]";
     var signupPerformanceJSON = "[]";
@@ -176,6 +177,11 @@
                 debugInfo += "L1_Trade: " + l1TradeRecords.length + " records (7-day). ";
                 l1TradeJSON = l1TradeRecords.length > 0 ? Stringify(l1TradeRecords) : "[]";
                 
+                // Load L2 Trade data (7-day recent data only)
+                var l2TradeRecords = retrieveAudienceL2TradeSnapshot(false);
+                debugInfo += "L2_Trade: " + l2TradeRecords.length + " records (7-day). ";
+                l2TradeJSON = l2TradeRecords.length > 0 ? Stringify(l2TradeRecords) : "[]";
+                
                 // Load DOI Pending Contacts aggregated data
                 var pendingContactsRecords = retrieveDOIPendingContacts();
                 debugInfo += "DOI_Pending_Contacts: " + pendingContactsRecords.length + " records. ";
@@ -223,6 +229,10 @@
                 var l1TradeRecords = retrieveAudienceL1TradeSnapshot();
                 debugInfo += "L1_Trade: " + l1TradeRecords.length + " records. ";
                 l1TradeJSON = l1TradeRecords.length > 0 ? Stringify(l1TradeRecords) : "[]";
+                
+                var l2TradeRecords = retrieveAudienceL2TradeSnapshot();
+                debugInfo += "L2_Trade: " + l2TradeRecords.length + " records. ";
+                l2TradeJSON = l2TradeRecords.length > 0 ? Stringify(l2TradeRecords) : "[]";
                 
             } else if (activeTab == "signups") {
                 // Signups tab needs: Signup performance (lifetime engagement) +
@@ -579,7 +589,108 @@
         return allRecords;
     }
 
-    // Note: retrieveAudienceL2TradeSnapshot() function removed - L2 data not displayed in UI
+    // Retrieve Audience L2 Trade Snapshot data using WSProxy with getNextBatch() pagination
+    // Mirrors retrieveAudienceL1TradeSnapshot but reads L2SubTrade (secondary trade) records.
+    //
+    // loadFullHistory parameter:
+    // - true: Load ALL records using pagination (no date filter, no batch limit)
+    // - false: Load only last 7 days with limited batches (fast loading for current view)
+    // regionFilter parameter (optional):
+    // - Array of region codes to filter by; if null/undefined, returns all regions
+    function retrieveAudienceL2TradeSnapshot(loadFullHistory, regionFilter) {
+        var allRecords = [];
+        try {
+            var prox = new Script.Util.WSProxy();
+            var cols = ["SnapshotDate", "Region", "L2SubTrade", "SubscriberCount"];
+            var moreData = true;
+            var reqID = null;
+            var batchCount = 0;
+            
+            var filter = null;
+            var maxBatches = loadFullHistory ? 100 : 3;
+            
+            if (!loadFullHistory) {
+                // CURRENT SNAPSHOT MODE: Load only last 7 days for fast loading
+                var sevenDaysAgo = new Date();
+                sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+                var year = sevenDaysAgo.getFullYear();
+                var month = sevenDaysAgo.getMonth() + 1;
+                var day = sevenDaysAgo.getDate();
+                var monthStr = month < 10 ? '0' + month : '' + month;
+                var dayStr = day < 10 ? '0' + day : '' + day;
+                var filterDate = year + '-' + monthStr + '-' + dayStr;
+                
+                filter = {
+                    Property: "SnapshotDate",
+                    SimpleOperator: "greaterThanOrEqual",
+                    Value: filterDate
+                };
+            }
+            // FULL HISTORY MODE: No date filter - retrieve all records using pagination
+            
+            // Create a lookup object for region filter (faster than array.indexOf)
+            var regionLookup = null;
+            if (regionFilter && regionFilter.length > 0) {
+                regionLookup = {};
+                for (var r = 0; r < regionFilter.length; r++) {
+                    regionLookup[regionFilter[r].toUpperCase()] = true;
+                }
+            }
+            
+            var opts = { BatchSize: 2500 };
+            var props = {};
+            
+            while (moreData && batchCount < maxBatches) {
+                moreData = false;
+                if (reqID) { props.ContinueRequest = reqID; }
+                var data = prox.retrieve("DataExtensionObject[Audience_L2_Trade_Snapshot]", cols, filter, opts, props);
+                
+                if (data && data.Results) {
+                    moreData = data.HasMoreRows;
+                    reqID = data.RequestID;
+                    batchCount++;
+                    
+                    for (var j = 0; j < data.Results.length; j++) {
+                        var result = data.Results[j];
+                        var obj = {
+                            snapshotDate: "",
+                            region: "",
+                            l2SubTrade: "",
+                            subscriberCount: 0
+                        };
+                        for (var k = 0; k < result.Properties.length; k++) {
+                            var prop = result.Properties[k];
+                            switch (prop.Name) {
+                                case "SnapshotDate":
+                                    obj.snapshotDate = formatDateValue(prop.Value);
+                                    break;
+                                case "Region":
+                                    obj.region = (prop.Value || "").toUpperCase();
+                                    break;
+                                case "L2SubTrade":
+                                    obj.l2SubTrade = prop.Value || "";
+                                    break;
+                                case "SubscriberCount":
+                                    obj.subscriberCount = safeInteger(prop.Value);
+                                    break;
+                            }
+                        }
+                        // Apply region filter if specified
+                        if (regionLookup) {
+                            if (regionLookup[obj.region]) {
+                                allRecords.push(obj);
+                            }
+                        } else {
+                            allRecords.push(obj);
+                        }
+                    }
+                }
+            }
+        } catch (e) {
+            debugInfo += "Error in retrieveAudienceL2TradeSnapshot: " + Stringify(e) + ". ";
+        }
+        return allRecords;
+    }
 
     // Retrieve Regional Monthly Metrics data
     function retrieveRegionalMonthlyMetrics() {
@@ -1401,6 +1512,7 @@
     Write('<script type="text/javascript">\n');
     Write('var dailySnapshotData = ' + safeScriptJSON(dailySnapshotJSON) + ';\n');
     Write('var l1TradeData = ' + safeScriptJSON(l1TradeJSON) + ';\n');
+    Write('var l2TradeData = ' + safeScriptJSON(l2TradeJSON) + ';\n');
     Write('var regionalMetricsData = ' + safeScriptJSON(regionalMetricsJSON) + ';\n');
     Write('var sendFactData = ' + safeScriptJSON(sendFactJSON) + ';\n');
     Write('var sendFactLookbackDate = ' + safeScriptString(sendFactLookbackDate) + ';\n');
@@ -1493,6 +1605,22 @@
                         <option value="">All Trades</option>
                     </select>
                 </div>
+                <div class="global-filter-group">
+                    <label>&nbsp;</label>
+                    <button type="button" class="btn btn-outline-primary" onclick="resetGlobalFilters()">Reset</button>
+                </div>
+            </div>
+            <!-- (R8) Shown when the global date range cannot match any snapshot
+                 day loaded on this tab - instead of silently blank charts -->
+            <div id="globalDateWindowNotice" class="no-print" style="display: none; background: #fff3cd; border: 1px solid #ffc107; border-radius: 4px; padding: 12px 16px; margin: 0 0 1rem 0;">
+                <div style="display: flex; align-items: start; gap: 10px;">
+                    <span style="font-size: 20px;">⚠️</span>
+                    <div style="flex: 1;">
+                        <strong style="color: #856404;">Date Filter Outside Loaded Data</strong>
+                        <div id="globalDateWindowNoticeText" style="color: #856404; font-size: 13px; margin-top: 2px;"></div>
+                    </div>
+                    <button type="button" class="btn btn-outline-primary" onclick="resetGlobalFilters(); document.getElementById('globalDateWindowNotice').style.display='none';" style="flex-shrink: 0;">Reset filters</button>
+                </div>
             </div>
             
             <!-- Mobile Tab Dropdown (visible on mobile only) -->
@@ -1539,6 +1667,8 @@
                     <div class="stats-cards" id="statsCards">
                         <div class="stat-card">
                             <div class="stat-value" id="totalSubscribers">0</div>
+                            <div id="totalSubscribersComparison"></div>
+                            <div class="data-as-of" id="overviewDataAsOf"></div>
                             <div class="stat-label">Current Total Subscribers</div>
                         </div>
                         <div class="stat-card clickable" onclick="showStatDetails('regions')" title="Click to see regions">
@@ -1684,6 +1814,12 @@
                     <div class="data-section" id="tradeDistributionSection">
                         <h2 id="tradeDistributionTitle">Primary Trade Distribution</h2>
                         <div class="table-controls">
+                            <div class="view-toggle trade-level-toggle">
+                                <button class="view-btn trade-level-btn active" data-level="L1" onclick="setTradeSnapshotLevel('L1')">Primary Trade</button>
+                                <button class="view-btn trade-level-btn" data-level="L2" onclick="setTradeSnapshotLevel('L2')">Secondary Trade</button>
+                            </div>
+                        </div>
+                        <div class="table-controls">
                             <div class="view-toggle">
                                 <button class="view-btn active" data-view="chart" onclick="toggleTradeSnapshotView('chart')">Doughnut</button>
                                 <button class="view-btn" data-view="bar" onclick="toggleTradeSnapshotView('bar')">Bar Chart</button>
@@ -1774,40 +1910,21 @@
                                 <label for="campaignSearchInput">Search Email Name/Subject:</label>
                                 <input type="text" id="campaignSearchInput" placeholder="Type to search..." oninput="debouncedFilterCampaigns()">
                             </div>
-                            <div class="campaign-filter-group" style="flex: 2;">
-                                <label>Filter by Region:</label>
-                                <div class="region-filter-container">
-                                    <button type="button" class="region-filter-button" id="campaign-region-button" onclick="toggleRegionFilter('campaign')">
-                                        <span id="campaign-region-label">All Regions</span>
-                                        <span>▼</span>
-                                    </button>
-                                    <div class="region-filter-dropdown" id="campaign-region-dropdown">
-                                        <div class="region-filter-header">
-                                            <h4>Select Regions</h4>
-                                            <div class="region-filter-actions">
-                                                <button type="button" class="region-filter-action-btn" onclick="selectAllRegions('campaign')">Select All</button>
-                                                <button type="button" class="region-filter-action-btn" onclick="clearAllRegions('campaign')">Clear All</button>
-                                            </div>
-                                        </div>
-                                        <div id="campaign-region-groups"></div>
-                                    </div>
-                                </div>
-                            </div>
                             <div class="campaign-filter-group">
-                                <label for="campaignStartDate">From Date:</label>
-                                <input type="date" id="campaignStartDate" onchange="filterCampaigns()">
-                            </div>
-                            <div class="campaign-filter-group">
-                                <label for="campaignEndDate">To Date:</label>
-                                <input type="date" id="campaignEndDate" onchange="filterCampaigns()">
+                                <label>&nbsp;</label>
+                                <button class="btn btn-outline-primary" onclick="clearCampaignFilters()">Clear Search</button>
                             </div>
                             <div class="campaign-filter-group">
                                 <label>&nbsp;</label>
-                                <button class="btn btn-outline-primary" onclick="clearCampaignFilters()">Clear Filters</button>
+                                <button class="btn btn-outline-primary" onclick="exportCampaignsCsv()">Export CSV</button>
+                            </div>
+                            <div class="campaign-filter-group filter-hint">
+                                <label>&nbsp;</label>
+                                <span class="filter-hint-text">Dates &amp; regions are set in the filter bar above</span>
                             </div>
                         </div>
                         
-                        <div style="display: flex; align-items: center; gap: 10px; padding: 10px 0; margin-bottom: 1rem; border-bottom: 1px solid #e8e8e8;">
+                        <div class="no-print" style="display: flex; align-items: center; gap: 10px; padding: 10px 0; margin-bottom: 1rem; border-bottom: 1px solid #e8e8e8;">
                             <input type="checkbox" id="hideTestSends" checked onchange="filterCampaigns()" style="width: 16px; height: 16px; cursor: pointer; margin: 0; accent-color: #DB021D;">
                             <label for="hideTestSends" style="margin: 0; cursor: pointer; font-size: 13px; color: #666; user-select: none;">
                                 Hide test sends <span style="color: #999; font-size: 12px;">(excludes [Test]/[Draft] and single-recipient emails)</span>
@@ -1821,7 +1938,7 @@
                                 <div style="flex: 1;">
                                     <strong style="color: #856404;">Filter Extends Beyond Loaded Data</strong>
                                     <p style="margin: 5px 0 0 0; color: #856404; font-size: 13px;">
-                                        Your <em>From&nbsp;Date</em> is earlier than the loaded window. This view contains
+                                        Your global <em>Date&nbsp;From</em> filter is earlier than the loaded window. This view contains
                                         campaigns sent on or after <strong><span id="campaignLookbackDate">—</span></strong>
                                         (last <span id="campaignLookbackDays">—</span>&nbsp;days). To include older
                                         campaigns, reload with <code>?campaignDays=N</code> in the URL (e.g.
@@ -1896,6 +2013,7 @@
                             <button class="chart-toggle" onclick="toggleChartGrouping('day')">Daily</button>
                             <button class="chart-toggle active" onclick="toggleChartGrouping('week')">Weekly</button>
                             <button class="chart-toggle" onclick="toggleChartGrouping('month')">Monthly</button>
+                            <button class="chart-toggle" onclick="downloadGrowthChartPng()" title="Download chart as PNG">Download PNG</button>
                         </div>
                         <div class="chart-container">
                             <canvas id="growthChart"></canvas>
@@ -1930,6 +2048,12 @@
                     <!-- Primary Trade Distribution Section (Growth Tab Copy) -->
                     <div class="data-section" id="growthTradeDistributionSection">
                         <h2 id="growthTradeDistributionTitle">Primary Trade Distribution</h2>
+                        <div class="table-controls">
+                            <div class="view-toggle trade-level-toggle">
+                                <button class="view-btn trade-level-btn active" data-level="L1" onclick="setTradeSnapshotLevel('L1')">Primary Trade</button>
+                                <button class="view-btn trade-level-btn" data-level="L2" onclick="setTradeSnapshotLevel('L2')">Secondary Trade</button>
+                            </div>
+                        </div>
                         <div class="table-controls">
                             <div class="view-toggle">
                                 <button class="view-btn active" data-view="chart" onclick="toggleGrowthTradeSnapshotView('chart')">Doughnut</button>
@@ -1969,6 +2093,10 @@
                             <div class="signup-filter-group">
                                 <label for="signupMinSends">Min Sends</label>
                                 <input type="number" id="signupMinSends" placeholder="Min sends..." value="0" oninput="debouncedFilterSignupPerformance()">
+                            </div>
+                            <div class="signup-filter-group">
+                                <label>&nbsp;</label>
+                                <button class="btn btn-outline-primary" onclick="exportSignupsCsv()">Export CSV</button>
                             </div>
                         </div>
 
