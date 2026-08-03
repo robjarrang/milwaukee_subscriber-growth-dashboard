@@ -1,4 +1,18 @@
-# Automation Studio Tasks Documentation
+SELECT
+    stg.JobID
+    , ISNULL(click_agg.TotalUniqueClicks, 0) AS TotalUniqueClicks
+    , ISNULL(click_agg.TotalClicks, 0) AS TotalClicks
+FROM Send_Engagement_Staging AS stg
+    LEFT JOIN (
+        SELECT
+            c.JobID
+            , COUNT(DISTINCT CASE WHEN c.IsUnique = 1 THEN c.SubscriberKey END) AS TotalUniqueClicks
+            , COUNT(c.SubscriberKey) AS TotalClicks
+        FROM _Click AS c
+        WHERE c.JobID IN (SELECT JobID FROM Send_Engagement_Staging)
+        GROUP BY c.JobID
+    ) AS click_agg
+        ON stg.JobID = click_agg.JobID# Automation Studio Tasks Documentation
 
 This document details all SQL Query Activities and Automation configurations for the Milwaukee Subscriber Growth Dashboard data pipeline.
 
@@ -2043,8 +2057,14 @@ FROM _Sent AS s
         ON s.JobID = sl.JobID 
         AND s.SubscriberKey = sl.SubscriberKey
         AND sl.MID = '510007388'
-WHERE s.EventDate >= DATEADD(DAY, -7, CAST(GETDATE() AS DATE))
-    AND s.EventDate < CAST(GETDATE() AS DATE)
+WHERE s.JobID IN (
+        -- Discover jobs that sent anything in the last 7 days...
+        SELECT JobID FROM _Sent
+        WHERE EventDate >= DATEADD(DAY, -7, CAST(GETDATE() AS DATE))
+            AND EventDate < CAST(GETDATE() AS DATE)
+    )
+    -- ...but DO NOT date-filter s itself, so MIN(EventDate) and the row scope
+    -- cover the WHOLE send even when it straddles midnight (see bug note below).
     AND (j.Category IS NULL OR j.Category <> 'Test Send Emails')
     AND j.EmailSubject NOT LIKE '[[]Test]%'
     AND LOWER(j.EmailName) NOT LIKE '%test%'
@@ -2055,7 +2075,9 @@ GROUP BY s.JobID, j.EmailID, j.EmailName
 - Pulls human-readable subject/preheader/campaign from `ENT.Sendlog_Email` (MID-filtered)
 - Falls back to `_Job.EmailSubject` when no Sendlog row exists
 - Excludes test/template sends by targeting genuine test markers (Category `Test Send Emails`, `[Test]`-prefixed subject, `test` in EmailName) instead of any `%` character — this preserves legitimate personalized subjects such as `%%First Name%%`
-- Captures earliest send timestamp per JobID via `MIN(s.EventDate)`
+- Captures earliest send timestamp per JobID via `MIN(s.EventDate)` over **all** of the job's send rows, not just those inside the current 7-day window
+
+> **Multi-day-send bug fix (July 2026).** The discovery window is applied via a `JobID IN (...)` sub-query rather than directly on `s`. Previously `s.EventDate` was filtered directly, so a send that spanned a calendar-day boundary (e.g. events on both 23 and 24 June) had its earlier day's rows fall out of the sliding window on later daily runs. Because Step 8 is an `Update` (upsert) that re-counts every day, the **last** in-window run overwrote the row with only the trailing day's slice — turning a 721-recipient send into `TotalSent = 2`. Scoping by `JobID` keeps every run counting the entire job, and the daily re-run now self-heals a partial capture instead of corrupting it.
 
 ### Step 2: `Daily_Send_Metrics_Aggregation_2` — Initialise Engagement Staging with TotalSent
 
@@ -2077,8 +2099,11 @@ SELECT
     , CAST(NULL AS INT) AS TotalUnsubscribes
     , CAST(NULL AS INT) AS TotalComplaints
 FROM _Sent AS s
-WHERE s.EventDate >= DATEADD(DAY, -7, CAST(GETDATE() AS DATE))
-    AND s.EventDate < CAST(GETDATE() AS DATE)
+-- Count the WHOLE job (all days), scoped to the jobs discovered in Step 1.
+-- Do NOT re-apply the 7-day EventDate window here: a send that straddles
+-- midnight would otherwise lose its earlier day's recipients on later runs,
+-- and the daily upsert would overwrite TotalSent with only the trailing slice.
+WHERE s.JobID IN (SELECT JobID FROM Send_JobID_Staging)
 GROUP BY s.JobID
 ```
 
@@ -2103,8 +2128,8 @@ FROM Send_Engagement_Staging AS stg
             , COUNT(DISTINCT b.SubscriberKey) AS TotalBounced
         FROM _Bounce AS b
         WHERE b.IsUnique = 1
-            AND b.EventDate >= DATEADD(DAY, -7, CAST(GETDATE() AS DATE))
-            AND b.EventDate < CAST(GETDATE() AS DATE)
+            -- Whole-job scope (no sliding date window) so multi-day sends and
+            -- late-arriving events are counted in full. See Step 1 bug note.
             AND b.JobID IN (SELECT JobID FROM Send_Engagement_Staging)
         GROUP BY b.JobID
     ) AS bounce_agg
@@ -2129,9 +2154,8 @@ FROM Send_Engagement_Staging AS stg
             , COUNT(DISTINCT CASE WHEN o.IsUnique = 1 THEN o.SubscriberKey END) AS TotalUniqueOpens
             , COUNT(o.SubscriberKey) AS TotalOpens
         FROM _Open AS o
-        WHERE o.EventDate >= DATEADD(DAY, -7, CAST(GETDATE() AS DATE))
-            AND o.EventDate < CAST(GETDATE() AS DATE)
-            AND o.JobID IN (SELECT JobID FROM Send_Engagement_Staging)
+        -- Whole-job scope (no sliding date window). See Step 1 bug note.
+        WHERE o.JobID IN (SELECT JobID FROM Send_Engagement_Staging)
         GROUP BY o.JobID
     ) AS open_agg
         ON stg.JobID = open_agg.JobID
@@ -2155,9 +2179,8 @@ FROM Send_Engagement_Staging AS stg
             , COUNT(DISTINCT CASE WHEN c.IsUnique = 1 THEN c.SubscriberKey END) AS TotalUniqueClicks
             , COUNT(c.SubscriberKey) AS TotalClicks
         FROM _Click AS c
-        WHERE c.EventDate >= DATEADD(DAY, -7, CAST(GETDATE() AS DATE))
-            AND c.EventDate < CAST(GETDATE() AS DATE)
-            AND c.JobID IN (SELECT JobID FROM Send_Engagement_Staging)
+        -- Whole-job scope (no sliding date window). See Step 1 bug note.
+        WHERE c.JobID IN (SELECT JobID FROM Send_Engagement_Staging)
         GROUP BY c.JobID
     ) AS click_agg
         ON stg.JobID = click_agg.JobID
@@ -2179,9 +2202,8 @@ FROM Send_Engagement_Staging AS stg
             u.JobID
             , COUNT(DISTINCT u.SubscriberKey) AS TotalUnsubscribes
         FROM _Unsubscribe AS u
-        WHERE u.EventDate >= DATEADD(DAY, -7, CAST(GETDATE() AS DATE))
-            AND u.EventDate < CAST(GETDATE() AS DATE)
-            AND u.JobID IN (SELECT JobID FROM Send_Engagement_Staging)
+        -- Whole-job scope (no sliding date window). See Step 1 bug note.
+        WHERE u.JobID IN (SELECT JobID FROM Send_Engagement_Staging)
         GROUP BY u.JobID
     ) AS unsub_agg
         ON stg.JobID = unsub_agg.JobID
@@ -2203,9 +2225,8 @@ FROM Send_Engagement_Staging AS stg
             comp.JobID
             , COUNT(DISTINCT comp.SubscriberKey) AS TotalComplaints
         FROM _Complaint AS comp
-        WHERE comp.EventDate >= DATEADD(DAY, -7, CAST(GETDATE() AS DATE))
-            AND comp.EventDate < CAST(GETDATE() AS DATE)
-            AND comp.JobID IN (SELECT JobID FROM Send_Engagement_Staging)
+        -- Whole-job scope (no sliding date window). See Step 1 bug note.
+        WHERE comp.JobID IN (SELECT JobID FROM Send_Engagement_Staging)
         GROUP BY comp.JobID
     ) AS comp_agg
         ON stg.JobID = comp_agg.JobID
@@ -2258,13 +2279,23 @@ FROM Send_JobID_Staging AS meta
 **Key Features:**
 - Joins metadata (`Send_JobID_Staging`) with engagement totals (`Send_Engagement_Staging`) on JobID
 - Calculates derived rates (Delivery, Bounce, Complaint, Open, CTR, CTOR, Unsubscribe) as `DECIMAL(6,4)` (0.0000–1.0000)
-- Update action upserts by `JobID` so existing rows are refreshed with the latest 7-day engagement counts
+- Update action upserts by `JobID` so existing rows are refreshed with the latest whole-job engagement counts
 - `CampaignID` and `Segment` reserved (NULL) for future use
 
 ### Execution Order Notes
 
 Steps 1 and 2 are independent of each other but Steps 3–7 all depend on Step 2 (they update `Send_Engagement_Staging`). Step 8 depends on both staging tables being fully populated. The current automation runs all 8 steps sequentially.
 
+### One-time backfill for already-corrupted rows (July 2026)
+
+The fix above only corrects sends processed **after** it ships. Rows already in `Send_Fact` for sends that straddled midnight (and have since aged out of the 7-day window) keep their bad counts \u2014 for example JobID `1820603` showing `TotalSent = 2` for a 721-recipient send. To repair them, run the corrected automation once against a wider discovery window:
+
+1. Temporarily change the discovery sub-query in **Step 1** and the WHERE in every event step from `-7` to the length of your `_Sent` retention, e.g. `DATEADD(DAY, -180, CAST(GETDATE() AS DATE))`. (Step 2 and Steps 3\u20137 are now scoped by `JobID IN (... staging)`, so widening Step 1's discovery window automatically pulls the right jobs through the whole chain \u2014 no other edits needed.)
+2. Run the automation manually once. Because Step 8 is an `Update` upsert keyed on `JobID`, every job still present in `_Sent` is recomputed with the whole-job logic and overwritten with correct totals.
+3. Revert the window back to `-7` and re-save so the daily run stays cheap.
+
+Sends older than `_Sent` retention cannot be recovered from source and would need manual correction if the exact totals matter.
+
 ---
 
-*Last Updated: 22 May 2026*
+*Last Updated: 16 July 2026*
