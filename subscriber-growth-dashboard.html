@@ -955,7 +955,7 @@
                 lifetimeAvgComplaintRate: 0, firstActivityMonth: "", lastActivityMonth: "",
                 monthsActive: 0, insertedDate: "", modifiedDate: ""
             };
-            var results = wsProxyRetrieveAll("Signup_Identifier_Performance_Lifetime", cols, null, 4, "Signup_Identifier_Performance_Lifetime");
+            var results = wsProxyRetrieveAll("Signup_Identifier_Performance_Lifetime_v2", cols, null, 4, "Signup_Identifier_Performance_Lifetime_v2");
             for (var j = 0; j < results.length; j++) {
                 var obj = mapRow(results[j], fieldMap, defaults);
                 obj.monthsActive = computeMonthsActive(obj.firstActivityMonth, obj.lastActivityMonth);
@@ -1196,7 +1196,7 @@
     function retrieveSignupSourceDetail(sourceIdentifier) {
         var allRecords = [];
         try {
-            var rows = Platform.Function.LookupRows("Signup_Identifier_Performance_Lifetime", "SignupIdentifier", sourceIdentifier);
+            var rows = Platform.Function.LookupRows("Signup_Identifier_Performance_Lifetime_v2", "SignupIdentifier", sourceIdentifier);
             if (rows && rows.length > 0) {
                 for (var i = 0; i < rows.length; i++) {
                     var row = rows[i];

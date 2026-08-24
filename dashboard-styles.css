@@ -2146,8 +2146,11 @@
         }
 
         /* Column resize styles */
+        /* position: sticky (not relative) so this header stays pinned like the
+           others - sticky still works as the resize-handle's positioning context. */
         .signup-table th.resizable {
-            position: relative;
+            position: sticky;
+            top: 0;
             width: 250px;
         }
 

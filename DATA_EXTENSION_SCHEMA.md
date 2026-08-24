@@ -175,6 +175,49 @@ These are the Data Extensions queried by the dashboard's SSJS code.
 
 ---
 
+## A.7 Signup_Identifier_Performance_Lifetime_v2
+
+**Purpose:** Lifetime engagement performance per signup identifier (source/form), rebuilt daily by the v2 Automation Studio pipeline (see `AUTOMATION_STUDIO_TASKS.md` — Task 11). Replaces the deprecated `Signup_Identifier_Performance_Lifetime` (v1) DE, which used a monthly-accumulator pattern that double-counted sends across runs and inflated totals (e.g. `MonthsActive` values far exceeding the real span of activity).
+
+**Note:** This is a local Data Extension (no `ENT.` prefix). Not to be confused with the Shared DE `ENT.SignupIdentifier_Performance_Milwaukee` (see A.5), which tracks a different metric (attributed new-subscriber counts by region) and is queried separately.
+
+| Field Name | Data Type | Length | Primary Key | Nullable | Default Value | Description |
+|------------|-----------|--------|-------------|----------|---------------|-------------|
+| SignupIdentifier | Text | 255 | ✓ | No | - | Unique identifier for the signup source/form |
+| ConsentStatus | Text | 100 | No | Yes | - | Most recent consent status observed for this identifier |
+| OriginalCaptureSource | Text | 1000 | No | Yes | - | Earliest capture source string recorded for this identifier |
+| LatestCaptureSource | Text | 1000 | No | Yes | - | Most recent capture source string recorded for this identifier |
+| TotalLifetimeSends | Number | - | No | Yes | 0 | Sum of all daily sends since the pipeline began tracking (bounded by System Data View retention, ~6 months) |
+| TotalLifetimeDelivered | Number | - | No | Yes | 0 | Sum of all daily delivered (sent minus bounced) |
+| TotalLifetimeBounced | Number | - | No | Yes | 0 | Sum of all daily bounces |
+| TotalLifetimeOpens | Number | - | No | Yes | 0 | Sum of all daily unique opens |
+| TotalLifetimeClicks | Number | - | No | Yes | 0 | Sum of all daily unique clicks |
+| TotalLifetimeUnsubscribes | Number | - | No | Yes | 0 | Sum of all daily unsubscribes |
+| TotalLifetimeComplaints | Number | - | No | Yes | 0 | Sum of all daily complaints |
+| LifetimeAvgDeliveryRate | Decimal | 6,4 | No | Yes | - | TotalLifetimeDelivered / TotalLifetimeSends |
+| LifetimeAvgBounceRate | Decimal | 6,4 | No | Yes | - | TotalLifetimeBounced / TotalLifetimeSends |
+| LifetimeAvgOpenRate | Decimal | 6,4 | No | Yes | - | TotalLifetimeOpens / TotalLifetimeDelivered |
+| LifetimeAvgCTR | Decimal | 6,4 | No | Yes | - | TotalLifetimeClicks / TotalLifetimeDelivered |
+| LifetimeAvgCTOR | Decimal | 6,4 | No | Yes | - | TotalLifetimeClicks / TotalLifetimeOpens |
+| LifetimeAvgUnsubscribeRate | Decimal | 6,4 | No | Yes | - | TotalLifetimeUnsubscribes / TotalLifetimeDelivered |
+| LifetimeAvgComplaintRate | Decimal | 6,4 | No | Yes | - | TotalLifetimeComplaints / TotalLifetimeDelivered |
+| FirstActivityMonth | Date | - | No | Yes | - | First calendar month with any recorded daily activity |
+| LastActivityMonth | Date | - | No | Yes | - | Most recent calendar month with recorded daily activity |
+| LastActivityDate | Date | - | No | Yes | - | Most recent individual day (from `Signup_Identifier_Daily_Facts_v2`) with recorded activity |
+| MonthsActive | Number | - | No | Yes | - | Count of distinct calendar months between FirstActivityMonth and LastActivityMonth |
+| InsertedDate | Date | - | No | No | GETDATE() | Timestamp when the row was first created |
+| ModifiedDate | Date | - | No | No | GETDATE() | Timestamp of the most recent rebuild |
+
+**Primary Key:** SignupIdentifier
+
+**Populated By:** Task 11, Step 9 (`Reporting_IdentifierPerformanceUpdate9_v2`) — **Overwrite**, rebuilt daily by summing the entire history in `Signup_Identifier_Daily_Facts_v2`.
+
+**Dashboard Usage:**
+- Signups tab: lifetime engagement metrics per signup identifier (`retrieveSignupPerformanceData()`, via WSProxy)
+- Signup-detail sub-page: single-identifier lookup (`retrieveSignupSourceDetail()`, via `Platform.Function.LookupRows()`)
+
+---
+
 # Section B: Automation Pipeline Data Extensions
 
 These Data Extensions are used by Automation Studio SQL Query Activities to aggregate email metrics. See `AUTOMATION_STUDIO_TASKS.md` for the SQL queries.
@@ -463,6 +506,88 @@ BounceRatePct = (TotalBouncedUnique / TotalSent) × 100
 - Read-only from the CloudPage perspective (populated by Automation Studio only)
 - Contacts older than 3 days are not counted as the confirmation link expires
 - Dashboard aggregates data client-side to show both regional and identifier views
+
+---
+
+## B.7 Signup_Identifier_Staging_v2
+
+**Purpose:** Daily-refreshed lookup mapping each subscriber to their current signup identifier, consent status, and capture source. Rebuilt from scratch every run so it always reflects the latest consent record per subscriber; used as the join target for Step 2 of Task 11.
+
+| Field Name | Data Type | Length | Primary Key | Nullable | Default Value | Description |
+|------------|-----------|--------|-------------|----------|---------------|-------------|
+| SubscriberKey | Text | 254 | ✓ | No | - | Subscriber key |
+| EmailAddress | EmailAddress | 254 | No | Yes | - | Subscriber's email address |
+| SignupIdentifier | Text | 255 | No | Yes | - | Current signup source/form identifier |
+| ConsentStatus | Text | 100 | No | Yes | - | Current consent status |
+| OriginalCaptureSource | Text | 1000 | No | Yes | - | Earliest capture source string on record (widened to 1000 chars — some capture source values exceed 255 chars and were truncating) |
+| LatestCaptureSource | Text | 1000 | No | Yes | - | Most recent capture source string on record |
+
+**Primary Key:** SubscriberKey
+
+**Populated By:** Task 11, Step 1 (`Reporting_IdentifierPerformanceUpdate1_v2`) — Overwrite, sourced from `ENT.Pivot_MarketingEmailOptIns_Milwaukee` and `ENT.ContactPointConsentExtended_Milwaukee`.
+
+**Dashboard Usage:** None — automation pipeline only, not queried by the CloudPage.
+
+---
+
+## B.8 Signup_Identifier_Day_Staging_v2
+
+**Purpose:** Rolling 7-day window of per-subscriber, per-send-day engagement flags, joined against `Signup_Identifier_Staging_v2` to attribute each day's activity to a signup identifier. This is the per-event staging layer that Step 8 aggregates into daily facts.
+
+| Field Name | Data Type | Length | Primary Key | Nullable | Default Value | Description |
+|------------|-----------|--------|-------------|----------|---------------|-------------|
+| JobID | Number | - | ✓ | No | - | Email send job identifier |
+| SubscriberKey | Text | 254 | ✓ | No | - | Subscriber key |
+| SignupIdentifier | Text | 255 | No | Yes | - | Signup source/form identifier (from Staging_v2) |
+| ConsentStatus | Text | 100 | No | Yes | - | Consent status (from Staging_v2) |
+| OriginalCaptureSource | Text | 1000 | No | Yes | - | Earliest capture source (from Staging_v2) |
+| LatestCaptureSource | Text | 1000 | No | Yes | - | Latest capture source (from Staging_v2) |
+| ActivityDate | Date | - | No | **Yes** | - | Calendar date of the send (nullable — some sends can resolve without a matching event date; see Step 3 validation fix below) |
+| IsBounced | Number | - | No | Yes | - | 1 if bounced, 0/blank otherwise |
+| IsOpened | Number | - | No | Yes | - | 1 if opened (unique), 0/blank otherwise |
+| IsClicked | Number | - | No | Yes | - | 1 if clicked (unique), 0/blank otherwise |
+| IsUnsubscribed | Number | - | No | Yes | - | 1 if unsubscribed, 0/blank otherwise |
+| IsComplaint | Number | - | No | Yes | - | 1 if complained, 0/blank otherwise |
+
+**Primary Key:** Composite key of (JobID, SubscriberKey)
+
+**Populated By:** Task 11, Step 2 (Overwrite — rolling 7-day window from `_Sent`), Steps 3–7 (Update — Bounces, Opens, Clicks, Unsubscribes, Complaints from their respective System Data Views).
+
+**Notes:**
+- `ActivityDate` was originally required (Nullable = No), which caused an SFMC validation error on Step 3 because bounce/open/click/unsubscribe/complaint updates don't always carry a date value for every row in the join. Changed to Nullable = Yes to resolve.
+
+**Dashboard Usage:** None — automation pipeline only, not queried by the CloudPage.
+
+---
+
+## B.9 Signup_Identifier_Daily_Facts_v2
+
+**Purpose:** Permanent, ever-growing daily-grain fact table — one row per (SignupIdentifier, ActivityDate) — accumulated via `Update` (never truncated/overwritten as a whole), so history is preserved even though the upstream System Data Views only retain ~6 months of raw events. This is the DE that Step 9 sums to rebuild the lifetime totals in `Signup_Identifier_Performance_Lifetime_v2` (A.7).
+
+| Field Name | Data Type | Length | Primary Key | Nullable | Default Value | Description |
+|------------|-----------|--------|-------------|----------|---------------|-------------|
+| SignupIdentifier | Text | 255 | ✓ | No | - | Signup source/form identifier |
+| ActivityDate | Date | - | ✓ | No | - | Calendar date these daily totals apply to |
+| ConsentStatus | Text | 100 | No | Yes | - | Consent status as of this day's run |
+| OriginalCaptureSource | Text | 1000 | No | Yes | - | Earliest capture source as of this day's run |
+| LatestCaptureSource | Text | 1000 | No | Yes | - | Latest capture source as of this day's run |
+| DailySends | Number | - | No | Yes | 0 | Sends for this identifier on this date |
+| DailyDelivered | Number | - | No | Yes | 0 | Delivered (sent minus bounced) for this identifier on this date |
+| DailyBounced | Number | - | No | Yes | 0 | Bounces for this identifier on this date |
+| DailyOpens | Number | - | No | Yes | 0 | Unique opens for this identifier on this date |
+| DailyClicks | Number | - | No | Yes | 0 | Unique clicks for this identifier on this date |
+| DailyUnsubscribes | Number | - | No | Yes | 0 | Unsubscribes for this identifier on this date |
+| DailyComplaints | Number | - | No | Yes | 0 | Complaints for this identifier on this date |
+| ModifiedDate | Date | - | No | No | GETDATE() | Timestamp of the most recent update to this row |
+
+**Primary Key:** Composite key of (SignupIdentifier, ActivityDate)
+
+**Populated By:** Task 11, Step 8 (`Reporting_IdentifierPerformanceUpdate8_v2`) — **Update**, aggregating `Signup_Identifier_Day_Staging_v2` grouped by (SignupIdentifier, ActivityDate).
+
+**Notes:**
+- This table is the reason v2 is idempotent and safe to re-run daily: each day's slice is written exactly once per (SignupIdentifier, ActivityDate) via upsert, so re-processing the same 7-day window on subsequent runs does not double-count — unlike the deprecated v1 monthly-accumulator design.
+
+**Dashboard Usage:** None — automation pipeline only, not queried by the CloudPage.
 
 ---
 

@@ -96,6 +96,7 @@ The dashboard queries the following Data Extensions (see `DATA_EXTENSION_SCHEMA.
 - **Regional_Email_Metrics_Milwaukee**: Aggregated regional email performance metrics
 - **SendFact_Milwaukee**: Individual email campaign send data
 - **SignupIdentifier_Performance_Milwaukee**: Signup source performance (Shared DE with `ENT.` prefix)
+- **Signup_Identifier_Performance_Lifetime_v2**: Lifetime engagement metrics per signup identifier, rebuilt daily (local DE)
 - **My Account**: MyAccount registration data with consent status (local DE)
 
 ### Authentication
@@ -143,6 +144,7 @@ Ensure your Marketing Cloud instance has the following Data Extensions:
 | `Regional_Email_Metrics_Milwaukee` | YearNumber, MonthNumber, Region, + metrics | Regional email performance |
 | `SendFact_Milwaukee` | JobID, EmailName, SendDate, Region, + metrics | Campaign-level data |
 | `ENT.SignupIdentifier_Performance_Milwaukee` | SnapshotDate, SignupIdentifier, Region | Signup source metrics (Shared DE) |
+| `Signup_Identifier_Performance_Lifetime_v2` | SignupIdentifier, TotalLifetimeSends, + rates | Lifetime signup identifier engagement (local DE, daily rebuild) |
 | `My Account` | Id, ContactId, RegistrationDate, UserCulture, ConsentStatus | MyAccount registrations |
 
 See `DATA_EXTENSION_SCHEMA.md` for complete field definitions.

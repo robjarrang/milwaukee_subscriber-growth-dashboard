@@ -2298,4 +2298,112 @@ Sends older than `_Sent` retention cannot be recovered from source and would nee
 
 ---
 
+## Task 11: Daily Signup Identifier Lifetime Performance (v2)
+
+**Automation:** `Reporting_IdentifierPerformanceUpdate_v2`
+
+**Purpose:** Rebuild lifetime engagement performance per signup identifier (source/form) using a daily-grain, idempotent fact-table pattern. Replaces the deprecated `Monthly_Signup_Identifier_Lifetime_Performance` automation (v1), which used a monthly accumulator that re-summed and re-inserted overlapping windows on every run — silently double-counting sends across runs and inflating totals (observed as `MonthsActive` values far exceeding the real span of activity, and corrupted/duplicated capture-source strings).
+
+**Why v2 fixes this:** Each run only ever *overwrites* the current subscriber→identifier mapping (Step 1) and the current rolling 7-day event window (Steps 2–7), then *upserts* (never truncates) exactly one row per (SignupIdentifier, ActivityDate) into the permanent daily facts table (Step 8). Because that upsert is keyed on the full grain, re-processing the same days on a later run overwrites the same rows with the same values instead of adding duplicates. The final lifetime table (Step 9) is always rebuilt from scratch by summing the *entire* history in the daily facts table, so it can never drift from what's actually stored.
+
+**Source:** System Data Views (`_Sent`, `_Bounce`, `_Open`, `_Click`, `_Unsubscribe`, `_Complaint`) and Shared DEs `ENT.Pivot_MarketingEmailOptIns_Milwaukee` + `ENT.ContactPointConsentExtended_Milwaukee`
+
+**Target Data Extensions:**
+- `Signup_Identifier_Staging_v2` (overwrite) — current subscriber → signup identifier / consent / capture source mapping
+- `Signup_Identifier_Day_Staging_v2` (overwrite + updates) — rolling 7-day per-subscriber engagement staging
+- `Signup_Identifier_Daily_Facts_v2` (update/upsert) — permanent daily-grain fact table, one row per (SignupIdentifier, ActivityDate)
+- `Signup_Identifier_Performance_Lifetime_v2` (overwrite) — final lifetime totals consumed by the dashboard (see `DATA_EXTENSION_SCHEMA.md` A.7)
+
+**Lookback Window:** Last 7 days for the event staging steps (Steps 2–7); Step 8/9 operate on whatever is currently in staging/facts, so the lifetime table always reflects everything accumulated in `Signup_Identifier_Daily_Facts_v2` to date.
+
+**Schedule:** Daily
+
+**Important — not to be confused with:** `SignupIdentifier_Performance_Milwaukee` (`ENT.` prefixed Shared DE, documented in `DATA_EXTENSION_SCHEMA.md` A.5) tracks a completely different metric (attributed new-subscriber counts by region) and is populated/owned outside this automation. This task only ever reads/writes the local `Signup_Identifier_*_v2` DEs.
+
+### Step 1: `Reporting_IdentifierPerformanceUpdate1_v2` — Rebuild Subscriber → Identifier Mapping
+
+**Target Data Extension:** `Signup_Identifier_Staging_v2`
+
+**Action:** Overwrite
+
+Maps every subscriber to their current `SignupIdentifier`, `ConsentStatus`, and capture-source values via `ENT.Pivot_MarketingEmailOptIns_Milwaukee` joined to `ENT.ContactPointConsentExtended_Milwaukee`. `OriginalCaptureSource` and `LatestCaptureSource` are truncated with `LEFT(..., 1000)` — some capture-source values recorded in the source system exceed 255 characters, which caused a truncation error at execution time before the target fields were widened to `Text(1000)` (see `DATA_EXTENSION_SCHEMA.md` B.7).
+
+### Step 2: `Reporting_IdentifierPerformanceUpdate2_v2` — Populate Rolling 7-Day Send Window
+
+**Target Data Extension:** `Signup_Identifier_Day_Staging_v2`
+
+**Action:** Overwrite
+
+Builds the per-send staging rows for the trailing 7-day window from `_Sent`, joined to `Signup_Identifier_Staging_v2` on `SubscriberKey` to attribute each send to a `SignupIdentifier`. Initializes the engagement flag columns (`IsBounced`, `IsOpened`, `IsClicked`, `IsUnsubscribed`, `IsComplaint`) to be filled in by Steps 3–7.
+
+### Step 3: `Reporting_IdentifierPerformanceUpdate3_v2` — Update Bounces
+
+**Target Data Extension:** `Signup_Identifier_Day_Staging_v2`
+
+**Action:** Update
+
+Joins `_Bounce` (filtered to `IsUnique = 1`) back to the staging table on `JobID` + `SubscriberKey` to set `IsBounced` and `ActivityDate`.
+
+> **Nullability fix:** `ActivityDate` on `Signup_Identifier_Day_Staging_v2` was originally required (Nullable = No), which caused an SFMC validation error on this step — not every row being updated resolves an event date in the same pass. Changed to Nullable = Yes to resolve (see `DATA_EXTENSION_SCHEMA.md` B.8).
+
+### Step 4: `Reporting_IdentifierPerformanceUpdate4_v2` — Update Opens
+
+**Target Data Extension:** `Signup_Identifier_Day_Staging_v2`
+
+**Action:** Update
+
+Joins `_Open` (filtered to `IsUnique = 1`) back to the staging table on `JobID` + `SubscriberKey` to set `IsOpened`.
+
+### Step 5: `Reporting_IdentifierPerformanceUpdate5_v2` — Update Clicks
+
+**Target Data Extension:** `Signup_Identifier_Day_Staging_v2`
+
+**Action:** Update
+
+Joins `_Click` (filtered to `IsUnique = 1`) back to the staging table on `JobID` + `SubscriberKey` to set `IsClicked`.
+
+### Step 6: `Reporting_IdentifierPerformanceUpdate6_v2` — Update Unsubscribes
+
+**Target Data Extension:** `Signup_Identifier_Day_Staging_v2`
+
+**Action:** Update
+
+Joins `_Unsubscribe` back to the staging table on `JobID` + `SubscriberKey` to set `IsUnsubscribed`.
+
+### Step 7: `Reporting_IdentifierPerformanceUpdate7_v2` — Update Complaints
+
+**Target Data Extension:** `Signup_Identifier_Day_Staging_v2`
+
+**Action:** Update
+
+Joins `_Complaint` back to the staging table on `JobID` + `SubscriberKey` to set `IsComplaint`.
+
+### Step 8: `Reporting_IdentifierPerformanceUpdate8_v2` — Aggregate Into Daily Facts
+
+**Target Data Extension:** `Signup_Identifier_Daily_Facts_v2`
+
+**Action:** Update (upsert, keyed on SignupIdentifier + ActivityDate)
+
+Aggregates `Signup_Identifier_Day_Staging_v2` grouped by (`SignupIdentifier`, `ActivityDate`) into `DailySends`, `DailyDelivered`, `DailyBounced`, `DailyOpens`, `DailyClicks`, `DailyUnsubscribes`, `DailyComplaints`, carrying forward the latest `ConsentStatus`/`OriginalCaptureSource`/`LatestCaptureSource` for that identifier. Because this is an upsert on the full grain, re-running the same 7-day window on subsequent days overwrites each date's row with the same recomputed values instead of adding duplicate/inflated totals — this is what makes the pipeline idempotent.
+
+### Step 9: `Reporting_IdentifierPerformanceUpdate9_v2` — Rebuild Lifetime Totals
+
+**Target Data Extension:** `Signup_Identifier_Performance_Lifetime_v2`
+
+**Action:** Overwrite
+
+Sums **all** rows in `Signup_Identifier_Daily_Facts_v2` grouped by `SignupIdentifier` to produce `TotalLifetimeSends`/`Delivered`/`Bounced`/`Opens`/`Clicks`/`Unsubscribes`/`Complaints`, derives the `LifetimeAvg*Rate` fields as `DECIMAL(6,4)` ratios (following the same rate-calculation pattern as Task 9, Step 8), and computes `FirstActivityMonth`, `LastActivityMonth`, `LastActivityDate`, and `MonthsActive` from the range of `ActivityDate` values seen per identifier. Because this step is a full Overwrite driven by a full re-aggregation of `Signup_Identifier_Daily_Facts_v2`, the lifetime table can never drift out of sync with the permanent daily facts — it's always a deterministic function of that table's current contents.
+
+### Execution Order Notes
+
+Step 1 must run before Step 2 (Step 2 joins against it). Steps 3–7 all depend on Step 2 and update the same target table but query independent System Data Views, so they must run sequentially against `Signup_Identifier_Day_Staging_v2` in the same automation. Step 8 depends on Steps 2–7 being fully applied. Step 9 depends on Step 8. All 9 steps run sequentially, daily.
+
+### Migration Notes (v1 → v2)
+
+- The old automation (`Monthly_Signup_Identifier_Lifetime_Performance`) and its target DE (`Signup_Identifier_Performance_Lifetime`, no `_v2` suffix) have been retired. The dashboard's SSJS (`retrieveSignupPerformanceData()` and `retrieveSignupSourceDetail()` in `subscriber-growth-dashboard.html`) now points at `Signup_Identifier_Performance_Lifetime_v2`.
+- v2's totals are expected to be smaller than v1's — this is correct, not a regression. v1 was inflated by the accumulator bug; v2 is bounded by genuine System Data View retention (~6 months) and will grow correctly and permanently from here on, since every day's slice is preserved forever in `Signup_Identifier_Daily_Facts_v2`.
+- The old `Signup_Identifier_Performance_Lifetime` (v1) DE can be safely deactivated/removed once the v2 pipeline has a few weeks of history and the dashboard has been confirmed working against v2 in production.
+
+---
+
 *Last Updated: 16 July 2026*
