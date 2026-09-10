@@ -6327,12 +6327,16 @@
             const latestSnapshotData = getLatestSnapshot(filteredSubscriberData, 'subscriber');
             const latestTradeSnapshotData = getLatestSnapshot(getActiveTradeData(), 'trade');
             renderSubscriberSnapshotChart(latestSnapshotData);
+            renderSubscriberTable();
             renderTradeSnapshotChart(latestTradeSnapshotData);
+            renderTradeTable();
             
             // Refresh Growth tab charts
             updateChart();
             renderGrowthSubscriberSnapshotChart(latestSnapshotData);
+            renderGrowthSubscriberTable();
             renderGrowthTradeSnapshotChart(latestTradeSnapshotData);
+            renderGrowthTradeTable();
             
             // Refresh Email Analytics
             renderEmailAnalytics();
